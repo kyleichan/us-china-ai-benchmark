@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <canvas id="c" width="500" height="670"></canvas>
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        
+        // Simulation Constants
+        const COLS = 10;
+        const ROWS = 10;
+        const WIDTH = 500;
+        const HEIGHT = 670;
+        const CELL_W = WIDTH / COLS;
+        const CELL_H = HEIGHT / ROWS;
+        const ROAD_W = 14;
+        const CAR_L = 8;
+        const CAR_W = 4;
+        const MAX_SPEED = 1.5; // Pixels per frame
+        const ACCEL = 0.05;
+        const BRAKE = 0.15;
+        const SAFE_DIST = 15;
+        const LIGHT_CYCLE = 120; // Frames per light phase
+
+        // State
+        let cars = [];
+        let lights = []; // 2D array [col][row] true=Vertical Green, false=Horizontal Green
+        let frameCount = 0;
+        let lastTime = Date.now();
+        let simStartTime = Date.now();
+
+        // Utility: Random
+        const rand = (min, max) => Math.random() * (max - min) + min;
+        const randInt = (min, max) => Math.floor(rand(min, max));
+
+        class Car {
+            constructor() {
+                // Pick random start and end edge
+                const side = randInt(0, 4); // 0:Top, 1:Right, 2:Bottom, 3:Left
+                this.active = true;
+                this.speed = rand(0.5, MAX_SPEED);
+                this.color = `hsl(${rand(0, 360)}, 70%, 60%)`;
+                
+                // Position logic based on grid
+                if (side === 0) { // Top
+                    this.col = randInt(0, COLS);
+                    this.row = -1;
+                    this.dir = {x: 0, y: 1}; // Down
+                    this.x = this.col * CELL_W + CELL_W/2 - ROAD_W/4;
+                    this.y = -10;
+                } else if (side === 1) { // Right
+                    this.col = COLS;
+                    this.row = randInt(0, ROWS);
+                    this.dir = {x: -1, y: 0}; // Left
+                    this.x = WIDTH + 10;
+                    this.y = this.row * CELL_H + CELL_H/2 - ROAD_W/4;
+                } else if (side === 2) { // Bottom
+                    this.col = randInt(0, COLS);
+                    this.row = ROWS;
+                    this.dir = {x: 0, y: -1}; // Up
+                    this.x = this.col * CELL_W + CELL_W/2 + ROAD_W/4;
+                    this.y = HEIGHT + 10;
+                } else { // Left
+                    this.col = -1;
+                    this.row = randInt(0, ROWS);
+                    this.dir = {x: 1, y: 0}; // Right
+                    this.x = -10;
+                    this.y = this.row * CELL_H + CELL_H/2 + ROAD_W/4;
+                }
+                
+                // Destination (simplified: just keep driving until out of bounds)
+                this.turning = false;
+                this.turnProgress = 0;
+            }
+
+            update() {
+                // Map current pos to grid
+                const gridX = Math.floor(this.x / CELL_W);
+                const gridY = Math.floor(this.y / CELL_H);
+                
+                // Look ahead logic
+                let distToObstacle = 999;
+                
+                // 1. Check Cars ahead
+                for (let other of cars) {
+                    if (other === this || !other.active) continue;
+                    
+                    // Simple distance check if in same lane/direction
+                    if (this.dir.x === other.dir.x && this.dir.y === other.dir.y) {
+                        let dx = other.x - this.x;
+                        let dy = other.y - this.y;
+                        let d = Math.sqrt(dx*dx + dy*dy);
+                        
+                        // Dot product to ensure car is actually ahead
+                        let dot = dx * this.dir.x + dy * this.dir.y;
+                        
+                        if (dot > 0 && Math.abs(dx * this.dir.y - dy * this.dir.x) < 6) {
+                            if (dot < distToObstacle) distToObstacle = dot;
+                        }
+                    }
+                }
+
+                // 2. Check Traffic Lights
+                // Determine approaching intersection
+                let nextInterX = (gridX + (this.dir.x > 0 ? 1 : 0)) * CELL_W + CELL_W/2; // Center of Intersection
+                let nextInterY = (gridY + (this.dir.y > 0 ? 1 : 0)) * CELL_H + CELL_H/2;
+                
+                // If moving left/up, the boundary is different
+                if (this.dir.x < 0) nextInterX = gridX * CELL_W + CELL_W/2;
+                if (this.dir.y < 0) nextInterY = gridY * CELL_H + CELL_H/2;
+
+                let distToInter = 999;
+                if (this.dir.x !== 0) distToInter = Math.abs(nextInterX - this.x);
+                else distToInter = Math.abs(nextInterY - this.y);
+
+                // Stop line distance (approx half road width before center)
+                let stopDist = distToInter - ROAD_W;
+
+                // Check light status
+                // Ensure valid grid indices
+                let checkCol = gridX;
+                let checkRow = gridY;
+                
+                // Correction for approaching from right or bottom
+                if (this.dir.x < 0) checkCol = gridX; 
+                if (this.dir.x > 0) checkCol = gridX + 1;
+                if (this.dir.y < 0) checkRow = gridY;
+                if (this.dir.y > 0) checkRow = gridY + 1;
+
+                // Clamp
+                if(checkCol >= 0 && checkCol < COLS && checkRow >= 0 && checkRow < ROWS) {
+                    // Normalize checking to current cell if within bounds
+                     // We actually need the light at the intersection we are approaching.
+                     // The grid cells contain intersections at their centers? 
+                     // No, let's assume intersections are at the grid coordinates.
+                     // Simplified: Grid[c][r] is the intersection.
+                     
+                     // Re-calculate intersection index based on direction
+                     let ix = Math.floor((this.x + this.dir.x * CELL_W/2) / CELL_W);
+                     let iy = Math.floor((this.y + this.dir.y * CELL_H/2) / CELL_H);
+                     
+                     if (ix >= 0 && ix < COLS && iy >= 0 && iy < ROWS) {
+                         let lightVerticalGreen = lights[ix][iy];
+                         let amIVertical = (this.dir.y !== 0);
+                         let redLight = (amIVertical && !lightVerticalGreen) || (!amIVertical && lightVerticalGreen);
+                         
+                         // Determine distance to center of that intersection
+                         let cx = ix * CELL_W + CELL_W/2;
+                         let cy = iy * CELL_H + CELL_H/2;
+                         let d = Math.abs((cx - this.x)*this.dir.x + (cy - this.y)*this.dir.y);
+                         
+                         // If red light and we are approaching it (not passed it)
+                         if (redLight && d < 40 && d > 5) { // 5 is 'passed' threshold
+                             if (d < distToObstacle) distToObstacle = d - (ROAD_W/2 + 4);
+                         }
+                         
+                         // Intersection Logic: Turn or go straight?
+                         // Only process turn if we are very close to center and light is green
+                         if (!redLight && d < 2 && !this.turning) {
+                            // Random chance to turn
+                            if (Math.random() < 0.3) {
+                                // Simple 90 degree turn logic
+                                let turnDir = Math.random() > 0.5 ? 1 : -1;
+                                // Rotate vector
+                                let oldX = this.dir.x;
+                                this.dir.x = -this.dir.y * turnDir;
+                                this.dir.y = oldX * turnDir;
+                                // Snap to center to avoid drifting
+                                this.x = cx + this.dir.x * 2;
+                                this.y = cy + this.dir.y * 2;
+                            }
+                         }
+                     }
+                }
+
+                // Physics (IDM simplified)
+                let targetV = MAX_SPEED;
+                
+                if (distToObstacle < SAFE_DIST) {
+                    targetV = 0; // Emergency brake
+                } else if (distToObstacle < SAFE_DIST * 3) {
+                    targetV = MAX_SPEED * 0.2; // Slow approach
+                }
+
+                if (this.speed < targetV) this.speed += ACCEL;
+                else this.speed -= BRAKE;
+                
+                if (this.speed < 0) this.speed = 0;
+                
+                this.x += this.dir.x * this.speed;
+                this.y += this.dir.y * this.speed;
+
+                // Deactivate if out of bounds
+                if (this.x < -20 || this.x > WIDTH + 20 || this.y < -20 || this.y > HEIGHT + 20) {
+                    this.active = false;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                let angle = Math.atan2(this.dir.y, this.dir.x);
+                ctx.rotate(angle);
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-CAR_L/2, -CAR_W/2, CAR_L, CAR_W);
+                // Headlights
+                ctx.fillStyle = "#ff0";
+                ctx.fillRect(CAR_L/2 - 1, -CAR_W/2, 1, 1);
+                ctx.fillRect(CAR_L/2 - 1, CAR_W/2 - 1, 1, 1);
+                // Taillights
+                ctx.fillStyle = "#f00";
+                ctx.fillRect(-CAR_L/2, -CAR_W/2, 1, 1);
+                ctx.fillRect(-CAR_L/2, CAR_W/2 - 1, 1, 1);
+                ctx.restore();
+            }
+        }
+
+        function init() {
+            simStartTime = Date.now();
+            cars = [];
+            lights = [];
+            frameCount = 0;
+
+            // Initialize Grid Lights
+            for (let i = 0; i < COLS; i++) {
+                lights[i] = [];
+                for (let j = 0; j < ROWS; j++) {
+                    lights[i][j] = Math.random() > 0.5; // Random start phase
+                }
+            }
+
+            // Pre-seed cars for instant congestion
+            for(let i=0; i<150; i++) {
+                let c = new Car();
+                // Randomize position along path to simulate ongoing traffic
+                c.x += c.dir.x * rand(0, WIDTH);
+                c.y += c.dir.y * rand(0, HEIGHT);
+                // Snap to grid lines
+                if(c.dir.x !== 0) {
+                     // Horizontal car, snap Y
+                     let r = Math.round((c.y - (CELL_H/2 + ROAD_W/4))/CELL_H);
+                     if(c.dir.x > 0) // Right (Top lane)
+                        c.y = r * CELL_H + CELL_H/2 - ROAD_W/4;
+                     else // Left (Bottom lane)
+                        c.y = r * CELL_H + CELL_H/2 + ROAD_W/4;
+                } else {
+                    // Vertical car, snap X
+                    let col = Math.round((c.x - (CELL_W/2 - ROAD_W/4))/CELL_W);
+                    if(c.dir.y > 0) // Down (Left lane logic relative to road? No, Right hand traffic)
+                        c.x = col * CELL_W + CELL_W/2 - ROAD_W/4;
+                    else
+                        c.x = col * CELL_W + CELL_W/2 + ROAD_W/4;
+                }
+                
+                // ensure within bounds
+                if (c.x > 0 && c.x < WIDTH && c.y > 0 && c.y < HEIGHT)
+                    cars.push(c);
+            }
+        }
+
+        function drawMap() {
+            ctx.fillStyle = "#111";
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Draw Roads
+            ctx.lineWidth = ROAD_W;
+            ctx.strokeStyle = "#333";
+            ctx.lineCap = "butt";
+
+            // Verticals
+            for (let i = 0; i < COLS; i++) {
+                let x = i * CELL_W + CELL_W/2;
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, HEIGHT);
+                ctx.stroke();
+                
+                // Dashed line center
+                ctx.save();
+                ctx.strokeStyle = "#555";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, HEIGHT);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Horizontals
+            for (let i = 0; i < ROWS; i++) {
+                let y = i * CELL_H + CELL_H/2;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(WIDTH, y);
+                ctx.stroke();
+
+                ctx.save();
+                ctx.strokeStyle = "#555";
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(WIDTH, y);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Draw Lights
+            for (let i = 0; i < COLS; i++) {
+                for (let j = 0; j < ROWS; j++) {
+                    let cx = i * CELL_W + CELL_W/2;
+                    let cy = j * CELL_H + CELL_H/2;
+                    let vGreen = lights[i][j];
+
+                    // Draw Light Body
+                    ctx.fillStyle = "#000";
+                    // ctx.fillRect(cx - 4, cy - 4, 8, 8); // Too cluttered
+
+                    // Logic: If VGreen, display Green for V-road, Red for H-road
+                    // Draw little dots offset from center
+                    
+                    // Vertical Traffic Lights (Top/Bottom of intersection)
+                    ctx.fillStyle = vGreen ? "#0f0" : "#f00";
+                    ctx.beginPath(); ctx.arc(cx, cy - ROAD_W, 2, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(cx, cy + ROAD_W, 2, 0, Math.PI*2); ctx.fill();
+
+                    // Horizontal Traffic Lights (Left/Right of intersection)
+                    ctx.fillStyle = !vGreen ? "#0f0" : "#f00";
+                    ctx.beginPath(); ctx.arc(cx - ROAD_W, cy, 2, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(cx + ROAD_W, cy, 2, 0, Math.PI*2); ctx.fill();
+                }
+            }
+        }
+
+        function loop() {
+            // Check restart
+            if (Date.now() - simStartTime > 10000) {
+                init();
+            }
+
+            // Toggle lights
+            frameCount++;
+            if (frameCount % LIGHT_CYCLE === 0) {
+                for (let i = 0; i < COLS; i++) {
+                    for (let j = 0; j < ROWS; j++) {
+                        lights[i][j] = !lights[i][j];
+                    }
+                }
+            }
+
+            // Spawn new cars occasionally
+            if (frameCount % 10 === 0) {
+                cars.push(new Car());
+            }
+
+            // Logic
+            cars.forEach(c => c.update());
+            cars = cars.filter(c => c.active);
+
+            // Draw
+            drawMap();
+            cars.forEach(c => c.draw());
+
+            requestAnimationFrame(loop);
+        }
+
+        init();
+        loop();
+
+    </script>
+</body>
+</html>

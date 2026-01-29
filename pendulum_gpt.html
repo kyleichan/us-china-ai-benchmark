@@ -1,0 +1,222 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c" width="500" height="670"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const W = canvas.width, H = canvas.height;
+
+  // Real-world-ish parameters (SI units)
+  const g = 9.81;
+  const m1 = 1.0, m2 = 1.0;
+  const L1 = 0.85, L2 = 0.85;         // meters
+  const bobR = 10;                    // pixels
+  const pivotY = 95;                  // pixels
+  const pivotX = W * 0.5;
+
+  // Pixels per meter: fit 2*L vertically with margin
+  const ppm = 300; // ~0.85m -> 255px each; total reach ~510px
+
+  // Numerical integration
+  const dtFixed = 1 / 240; // continuous-time integration step
+  const maxSubSteps = 16;
+
+  // Trail
+  const trail = [];
+  const maxTrail = 2200; // points
+  const trailFadeAlpha = 0.06;
+
+  // State
+  let theta1, theta2, omega1, omega2;
+
+  function reset() {
+    // Start near the top (near inverted), slight offset to break symmetry
+    theta1 = Math.PI - 0.18;
+    theta2 = Math.PI - 0.12;
+    omega1 = 0.0;
+    omega2 = 0.0;
+    trail.length = 0;
+    // Clear frame
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Double pendulum equations of motion (no damping)
+  function derivs(t1, w1, t2, w2) {
+    const d = t1 - t2;
+    const sinD = Math.sin(d), cosD = Math.cos(d);
+
+    const den1 = L1 * (2*m1 + m2 - m2 * Math.cos(2*d));
+    const den2 = L2 * (2*m1 + m2 - m2 * Math.cos(2*d));
+
+    const a1 =
+      (-g*(2*m1 + m2)*Math.sin(t1)
+       - m2*g*Math.sin(t1 - 2*t2)
+       - 2*sinD*m2*(w2*w2*L2 + w1*w1*L1*cosD)) / den1;
+
+    const a2 =
+      (2*sinD*(w1*w1*L1*(m1 + m2)
+               + g*(m1 + m2)*Math.cos(t1)
+               + w2*w2*L2*m2*cosD)) / den2;
+
+    return [w1, a1, w2, a2];
+  }
+
+  // RK4 step
+  function rk4Step(h) {
+    const k1 = derivs(theta1, omega1, theta2, omega2);
+
+    const t1_2 = theta1 + 0.5*h*k1[0];
+    const w1_2 = omega1 + 0.5*h*k1[1];
+    const t2_2 = theta2 + 0.5*h*k1[2];
+    const w2_2 = omega2 + 0.5*h*k1[3];
+    const k2 = derivs(t1_2, w1_2, t2_2, w2_2);
+
+    const t1_3 = theta1 + 0.5*h*k2[0];
+    const w1_3 = omega1 + 0.5*h*k2[1];
+    const t2_3 = theta2 + 0.5*h*k2[2];
+    const w2_3 = omega2 + 0.5*h*k2[3];
+    const k3 = derivs(t1_3, w1_3, t2_3, w2_3);
+
+    const t1_4 = theta1 + h*k3[0];
+    const w1_4 = omega1 + h*k3[1];
+    const t2_4 = theta2 + h*k3[2];
+    const w2_4 = omega2 + h*k3[3];
+    const k4 = derivs(t1_4, w1_4, t2_4, w2_4);
+
+    theta1 += (h/6) * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+    omega1 += (h/6) * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+    theta2 += (h/6) * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+    omega2 += (h/6) * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+
+    // keep angles bounded to avoid numeric blowup in long runs
+    const twopi = Math.PI * 2;
+    if (theta1 > Math.PI) theta1 = ((theta1 + Math.PI) % twopi) - Math.PI;
+    if (theta1 < -Math.PI) theta1 = ((theta1 - Math.PI) % twopi) + Math.PI;
+    if (theta2 > Math.PI) theta2 = ((theta2 + Math.PI) % twopi) - Math.PI;
+    if (theta2 < -Math.PI) theta2 = ((theta2 - Math.PI) % twopi) + Math.PI;
+  }
+
+  function pos() {
+    const x1 = pivotX + (L1*ppm) * Math.sin(theta1);
+    const y1 = pivotY + (L1*ppm) * Math.cos(theta1);
+    const x2 = x1 + (L2*ppm) * Math.sin(theta2);
+    const y2 = y1 + (L2*ppm) * Math.cos(theta2);
+    return { x1, y1, x2, y2 };
+  }
+
+  function speedColor(omegaAbs) {
+    // Map angular speed to hue: slow->blue, fast->red
+    // Clamp in a realistic range.
+    const w = Math.min(Math.max(omegaAbs, 0), 18);
+    const t = w / 18;
+    const hue = 220 - 220*t; // 220 (blue) -> 0 (red)
+    const sat = 100;
+    const light = 60 - 10*t;
+    return `hsl(${hue.toFixed(1)} ${sat}% ${light.toFixed(1)}%)`;
+  }
+
+  let lastTS = performance.now();
+  let accum = 0;
+
+  const startTS = performance.now();
+  let lastResetTS = startTS;
+
+  function frame(ts) {
+    // Restart every 10 seconds (real time)
+    if (ts - lastResetTS >= 10000) {
+      lastResetTS = ts;
+      reset();
+    }
+
+    let dt = (ts - lastTS) / 1000;
+    lastTS = ts;
+    if (!isFinite(dt) || dt < 0) dt = 0;
+    dt = Math.min(dt, 0.05);
+
+    accum += dt;
+
+    // Integrate in fixed steps for stability while staying real-time
+    let steps = 0;
+    while (accum >= dtFixed && steps < maxSubSteps) {
+      rk4Step(dtFixed);
+      accum -= dtFixed;
+      steps++;
+
+      const { x2, y2 } = pos();
+      const col = speedColor(Math.abs(omega2));
+      trail.push({ x: x2, y: y2, c: col });
+      if (trail.length > maxTrail) trail.splice(0, trail.length - maxTrail);
+    }
+    // If frame stalled, drop excess accumulation to keep real-time speed
+    if (steps === maxSubSteps) accum = 0;
+
+    // Draw with slight fade to keep trail luminous but not infinite
+    ctx.fillStyle = `rgba(0,0,0,${trailFadeAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw trail segments
+    if (trail.length > 2) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i-1], b = trail[i];
+        ctx.strokeStyle = b.c;
+        ctx.globalAlpha = Math.min(1, i / trail.length);
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Draw pendulum
+    const { x1, y1, x2, y2 } = pos();
+
+    // Rods
+    ctx.strokeStyle = '#cfcfcf';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(pivotX, pivotY);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Pivot
+    ctx.fillStyle = '#e6e6e6';
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, 5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Bobs
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x1, y1, bobR, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x2, y2, bobR, 0, Math.PI*2);
+    ctx.fill();
+
+    requestAnimationFrame(frame);
+  }
+
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

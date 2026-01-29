@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deterministic Flow Field</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        canvas {
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="flowCanvas" width="500" height="670"></canvas>
+
+<script>
+/**
+ * Deterministic Simplex Noise
+ * Based on standard implementation, adapted for seeded determinism using an LCG.
+ */
+class SimplexNoise {
+    constructor(seed = 0) {
+        this.p = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) this.p[i] = i;
+        
+        // Seeded shuffle (Fisher-Yates)
+        // LCG: https://en.wikipedia.org/wiki/Linear_congruential_generator
+        let s = seed;
+        const next = () => {
+            s = (s * 1664525 + 1013904223) % 4294967296;
+            return s / 4294967296;
+        };
+
+        for (let i = 255; i > 0; i--) {
+            const j = Math.floor(next() * (i + 1));
+            [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
+        }
+
+        this.perm = new Uint8Array(512);
+        this.permMod12 = new Uint8Array(512);
+        for (let i = 0; i < 512; i++) {
+            this.perm[i] = this.p[i & 255];
+            this.permMod12[i] = this.perm[i] % 12;
+        }
+    }
+
+    dot(g, x, y) {
+        return g[0] * x + g[1] * y;
+    }
+
+    // 2D Simplex Noise
+    noise2D(xin, yin) {
+        const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
+        const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
+        const grad3 = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[1,0],[-1,0],[0,1],[0,-1],[0,1],[0,-1]];
+
+        let n0, n1, n2;
+        let s = (xin + yin) * F2;
+        let i = Math.floor(xin + s);
+        let j = Math.floor(yin + s);
+        let t = (i + j) * G2;
+        let X0 = i - t;
+        let Y0 = j - t;
+        let x0 = xin - X0;
+        let y0 = yin - Y0;
+
+        let i1, j1;
+        if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+
+        let x1 = x0 - i1 + G2;
+        let y1 = y0 - j1 + G2;
+        let x2 = x0 - 1.0 + 2.0 * G2;
+        let y2 = y0 - 1.0 + 2.0 * G2;
+
+        let ii = i & 255;
+        let jj = j & 255;
+        let gi0 = this.permMod12[ii + this.perm[jj]];
+        let gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
+        let gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
+
+        let t0 = 0.5 - x0 * x0 - y0 * y0;
+        if (t0 < 0) n0 = 0.0;
+        else {
+            t0 *= t0;
+            n0 = t0 * t0 * this.dot(grad3[gi0], x0, y0);
+        }
+
+        let t1 = 0.5 - x1 * x1 - y1 * y1;
+        if (t1 < 0) n1 = 0.0;
+        else {
+            t1 *= t1;
+            n1 = t1 * t1 * this.dot(grad3[gi1], x1, y1);
+        }
+
+        let t2 = 0.5 - x2 * x2 - y2 * y2;
+        if (t2 < 0) n2 = 0.0;
+        else {
+            t2 *= t2;
+            n2 = t2 * t2 * this.dot(grad3[gi2], x2, y2);
+        }
+
+        return 70.0 * (n0 + n1 + n2);
+    }
+}
+
+/**
+ * Particle System
+ */
+class FlowField {
+    constructor(canvasId, seed) {
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d', { alpha: false }); // Optimize for non-transparent bg
+        
+        // Explicitly set canvas size to ensure correctness
+        this.width = 500;
+        this.height = 670;
+        this.canvas.width = this.width;
+        this.canvas.height = this.height;
+
+        this.particleCount = 2000;
+        this.speed = 2.0;
+        this.noiseScale = 0.0035;
+        this.timeScale = 0.0002;
+        
+        this.seed = seed;
+        this.noise = new SimplexNoise(this.seed);
+        this.time = 0;
+        
+        this.particles = [];
+        this.initParticles();
+
+        // Animation Loop
+        this.animate = this.animate.bind(this);
+        this.frameId = requestAnimationFrame(this.animate);
+    }
+
+    initParticles() {
+        this.particles = [];
+        // Seeded random generator for particle positions
+        let s = this.seed * 12345;
+        const nextRand = () => {
+            s = (s * 16807) % 2147483647;
+            return (s - 1) / 2147483646;
+        };
+
+        for (let i = 0; i < this.particleCount; i++) {
+            this.particles.push({
+                x: nextRand() * this.width,
+                y: nextRand() * this.height,
+                history: [] // For trails if we wanted complex lines, but we'll use fade technique
+            });
+        }
+    }
+
+    // Curl Noise calculation
+    // We use a scalar potential Psi = noise(x, y, time)
+    // curl = (-dPsi/dy, dPsi/dx)
+    getCurl(x, y, t) {
+        const eps = 1.0; // Small offset for derivative approximation
+        
+        // Potential at neighbors
+        const n1 = this.noise.noise2D(x * this.noiseScale, (y + eps) * this.noiseScale + t);
+        const n2 = this.noise.noise2D(x * this.noiseScale, (y - eps) * this.noiseScale + t);
+        const n3 = this.noise.noise2D((x + eps) * this.noiseScale, y * this.noiseScale + t);
+        const n4 = this.noise.noise2D((x - eps) * this.noiseScale, y * this.noiseScale + t);
+
+        // Partial derivatives
+        const dy = (n1 - n2) / (2 * eps);
+        const dx = (n3 - n4) / (2 * eps);
+
+        // Curl vector (rotated gradient)
+        // vx = -dPsi/dy
+        // vy = dPsi/dx
+        return { x: -dy, y: dx };
+    }
+
+    update() {
+        this.time += this.timeScale;
+
+        // Clear with slight fade for trails
+        // Using 'source-over' with low opacity black rectangle creates trails
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+        this.ctx.fillRect(0, 0, this.width, this.height);
+
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+
+        for (let i = 0; i < this.particleCount; i++) {
+            let p = this.particles[i];
+
+            // Get vector field direction (Curl Noise)
+            let vector = this.getCurl(p.x, p.y, this.time);
+
+            // Normalize to constant speed
+            let mag = Math.sqrt(vector.x * vector.x + vector.y * vector.y);
+            
+            // Avoid division by zero if noise produces a perfect 0 (unlikely but safe)
+            if (mag === 0) mag = 1; 
+
+            vector.x = (vector.x / mag) * this.speed;
+            vector.y = (vector.y / mag) * this.speed;
+
+            // Update position
+            p.x += vector.x;
+            p.y += vector.y;
+
+            // Wrap around edges (Toroidal topology)
+            if (p.x < 0) p.x = this.width;
+            if (p.x > this.width) p.x = 0;
+            if (p.y < 0) p.y = this.height;
+            if (p.y > this.height) p.y = 0;
+
+            // Draw
+            // Using fillRect is faster than arc for 2000 particles
+            // Optimization: Check if particle is within bounds just in case
+            if (p.x >= 0 && p.x <= this.width && p.y >= 0 && p.y <= this.height) {
+                this.ctx.fillRect(Math.round(p.x), Math.round(p.y), 1.5, 1.5);
+            }
+        }
+    }
+
+    animate() {
+        this.update();
+        this.frameId = requestAnimationFrame(this.animate);
+    }
+
+    stop() {
+        cancelAnimationFrame(this.frameId);
+    }
+    
+    reset(newSeed) {
+        this.seed = newSeed;
+        this.noise = new SimplexNoise(this.seed);
+        this.time = 0;
+        this.initParticles();
+        // Clear screen immediately
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, this.width, this.height);
+    }
+}
+
+// --- Initialization & Control ---
+
+let seed = 123;
+let flowField = new FlowField('flowCanvas', seed);
+
+// Restart every 10 seconds
+setInterval(() => {
+    seed++;
+    flowField.reset(seed);
+}, 10000);
+
+</script>
+</body>
+</html>

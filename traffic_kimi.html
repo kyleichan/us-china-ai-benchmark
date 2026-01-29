@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urban Traffic Simulation</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background-color: #050505;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="simCanvas" width="500" height="670"></canvas>
+
+<script>
+/**
+ * Urban Traffic Simulation
+ * 
+ * A 10x10 grid of streets.
+ * Canvas: 500x670 pixels.
+ * Logic: Agent-based. Vehicles follow local rules (speed, lights, distance).
+ * Traffic lights operate on a timer.
+ */
+
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+// Simulation Constants
+const WIDTH = 500;
+const HEIGHT = 670;
+const GRID_SIZE = 10;
+const ROAD_WIDTH = 40;
+const BLOCK_SIZE = (WIDTH - (GRID_SIZE + 1) * ROAD_WIDTH) / GRID_SIZE; // Calculate block size to fit exactly
+const TOTAL_CARS = 150; // Total number of cars to manage
+const CAR_RADIUS = 3.5;
+const MAX_SPEED = 3;
+const ACCELERATION = 0.1;
+const BRAKING = 0.2;
+const SAFE_DISTANCE = 12; // Minimum distance to car ahead
+const LIGHT_CYCLE = 180; // Frames per light change
+const RESTART_INTERVAL = 10000; // 10 seconds
+
+// State
+let cars = [];
+let lights = [];
+let frameCount = 0;
+let lastTime = 0;
+let startTime = 0;
+
+// Helper: Calculate position from grid coordinates
+// i: 0-10 (road index), horizontal
+// j: 0-10 (road index), vertical
+function getRoadX(i) {
+    return ROAD_WIDTH / 2 + i * (BLOCK_SIZE + ROAD_WIDTH);
+}
+
+function getRoadY(j) {
+    return ROAD_WIDTH / 2 + j * (BLOCK_SIZE + ROAD_WIDTH);
+}
+
+// --- Classes ---
+
+class TrafficLight {
+    constructor(gi, gj) {
+        this.gi = gi; // Grid intersection index
+        this.gj = gj;
+        this.x = getRoadX(gi);
+        this.y = getRoadY(gj);
+        // State: 0 = NS Green/EW Red, 1 = NS Red/EW Green
+        this.state = (gi + gj) % 2 === 0 ? 0 : 1; 
+        this.timer = Math.floor(Math.random() * LIGHT_CYCLE);
+    }
+
+    update() {
+        this.timer++;
+        if (this.timer > LIGHT_CYCLE) {
+            this.timer = 0;
+            this.state = 1 - this.state;
+        }
+    }
+
+    draw(ctx) {
+        // Draw intersection background
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(this.x - ROAD_WIDTH/2, this.y - ROAD_WIDTH/2, ROAD_WIDTH, ROAD_WIDTH);
+
+        // Draw lights
+        // NS Light
+        ctx.fillStyle = this.state === 0 ? '#0f0' : '#500';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y - ROAD_WIDTH/4, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // EW Light
+        ctx.fillStyle = this.state === 1 ? '#0f0' : '#500';
+        ctx.beginPath();
+        ctx.arc(this.x - ROAD_WIDTH/4, this.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Visual cleanup for unused quadrants (corners of intersection)
+        ctx.fillStyle = '#050505'; // Match background
+        // We don't strictly need to draw corners, the background is already black.
+    }
+
+    // Check if a car must stop
+    // dir: 0=Up, 1=Right, 2=Down, 3=Left
+    isRedFor(dir) {
+        if (dir === 0 || dir === 2) return this.state === 1; // NS is Red if state is 1
+        if (dir === 1 || dir === 3) return this.state === 0; // EW is Red if state is 0
+        return false;
+    }
+}
+
+class Car {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        // Pick a random road and side
+        // 0: Top (Y=0), 1: Right (X=Width), 2: Bottom (Y=Height), 3: Left (X=0)
+        const side = Math.floor(Math.random() * 4);
+        const laneOffset = (Math.random() > 0.5 ? 1 : -1) * (ROAD_WIDTH / 4); // Inner or outer lane
+
+        if (side === 0) { // Top -> Down
+            this.x = getRoadX(Math.floor(Math.random() * 11)) + laneOffset;
+            this.y = -20;
+            this.dir = 2; 
+        } else if (side === 1) { // Right -> Left
+            this.x = WIDTH + 20;
+            this.y = getRoadY(Math.floor(Math.random() * 11)) + laneOffset;
+            this.dir = 3;
+        } else if (side === 2) { // Bottom -> Up
+            this.x = getRoadX(Math.floor(Math.random() * 11)) + laneOffset;
+            this.y = HEIGHT + 20;
+            this.dir = 0;
+        } else { // Left -> Right
+            this.x = -20;
+            this.y = getRoadY(Math.floor(Math.random() * 11)) + laneOffset;
+            this.dir = 1;
+        }
+
+        this.vx = 0;
+        this.vy = 0;
+        this.speed = 0;
+        this.maxSpeed = MAX_SPEED + (Math.random() * 0.5); // Slight variation
+        this.color = `hsl(${Math.random() * 360}, 80%, 60%)`;
+        this.id = Math.random();
+        
+        // To prevent immediate turn-back logic, track last intersection passed
+        this.lastInt = null; 
+    }
+
+    update() {
+        // 1. Determine Target Speed
+        let targetSpeed = this.maxSpeed;
+
+        // 2. Check Traffic Lights
+        // We need to find the next intersection in our path
+        // Grid coordinates
+        let currentGi = -1;
+        let currentGj = -1;
+        
+        // Find which road segment we are on
+        // X Roads are at getRoadX(0..10)
+        // Y Roads are at getRoadY(0..10)
+        
+        // Simple check: are we approaching an intersection?
+        let nextLight = null;
+        let distToLight = Infinity;
+
+        if (this.dir === 1) { // Right
+            // Find next vertical road x
+            for(let i=0; i<=10; i++) {
+                let rx = getRoadX(i);
+                if (rx > this.x) {
+                    nextLight = lights.find(l => l.gi === i && l.gj === this.getCurrentGj());
+                    distToLight = rx - this.x;
+                    break;
+                }
+            }
+        } else if (this.dir === 3) { // Left
+            for(let i=10; i>=0; i--) {
+                let rx = getRoadX(i);
+                if (rx < this.x) {
+                    nextLight = lights.find(l => l.gi === i && l.gj === this.getCurrentGj());
+                    distToLight = this.x - rx;
+                    break;
+                }
+            }
+        } else if (this.dir === 2) { // Down
+            for(let j=0; j<=10; j++) {
+                let ry = getRoadY(j);
+                if (ry > this.y) {
+                    nextLight = lights.find(l => l.gj === j && l.gi === this.getCurrentGi());
+                    distToLight = ry - this.y;
+                    break;
+                }
+            }
+        } else if (this.dir === 0) { // Up
+            for(let j=10; j>=0; j--) {
+                let ry = getRoadY(j);
+                if (ry < this.y) {
+                    nextLight = lights.find(l => l.gj === j && l.gi === this.getCurrentGi());
+                    distToLight = this.y - ry;
+                    break;
+                }
+            }
+        }
+
+        // Light Logic: Stop if red and close
+        if (nextLight && nextLight.isRedFor(this.dir)) {
+            // Stop line is slightly before the intersection center
+            if (distToLight < ROAD_WIDTH && distToLight > 2) {
+                targetSpeed = 0;
+            }
+        }
+
+        // 3. Check Car Ahead (Collision Avoidance)
+        let distToCar = this.checkDistanceToCarAhead();
+        if (distToCar < SAFE_DISTANCE + 5) { // Buffer zone
+            targetSpeed = 0;
+        } else if (distToCar < SAFE_DISTANCE * 2) {
+            targetSpeed = this.maxSpeed * 0.5;
+        }
+
+        // 4. Apply Physics
+        if (this.speed < targetSpeed) {
+            this.speed += ACCELERATION;
+            if (this.speed > targetSpeed) this.speed = targetSpeed;
+        } else if (this.speed > targetSpeed) {
+            this.speed -= BRAKING;
+            if (this.speed < targetSpeed) this.speed = targetSpeed;
+        }
+
+        // 5. Move
+        if (this.dir === 0) this.y -= this.speed;
+        if (this.dir === 1) this.x += this.speed;
+        if (this.dir === 2) this.y += this.speed;
+        if (this.dir === 3) this.x -= this.speed;
+
+        // 6. Reset if out of bounds
+        if (this.x < -50 || this.x > WIDTH + 50 || this.y < -50 || this.y > HEIGHT + 50) {
+            this.reset();
+        }
+    }
+
+    getCurrentGi() {
+        // Approximate current grid index based on X
+        // This is a rough approximation for light lookup
+        let closest = 0;
+        let minD = 9999;
+        for(let i=0; i<=10; i++) {
+            let d = Math.abs(getRoadX(i) - this.x);
+            if (d < minD) { minD = d; closest = i; }
+        }
+        return closest;
+    }
+
+    getCurrentGj() {
+        let closest = 0;
+        let minD = 9999;
+        for(let j=0; j<=10; j++) {
+            let d = Math.abs(getRoadY(j) - this.y);
+            if (d < minD) { minD = d; closest = j; }
+        }
+        return closest;
+    }
+
+    checkDistanceToCarAhead() {
+        let minDist = Infinity;
+        
+        for (let other of cars) {
+            if (other === this) continue;
+            
+            // Check if on same road (roughly same X or Y)
+            let sameRoad = false;
+            let dist = Infinity;
+
+            if (this.dir === 1 && other.dir === 1) { // Both Right
+                if (Math.abs(other.y - this.y) < ROAD_WIDTH/2 && other.x > this.x) {
+                    dist = other.x - this.x;
+                    sameRoad = true;
+                }
+            } else if (this.dir === 3 && other.dir === 3) { // Both Left
+                if (Math.abs(other.y - this.y) < ROAD_WIDTH/2 && other.x < this.x) {
+                    dist = this.x - other.x;
+                    sameRoad = true;
+                }
+            } else if (this.dir === 2 && other.dir === 2) { // Both Down
+                if (Math.abs(other.x - this.x) < ROAD_WIDTH/2 && other.y > this.y) {
+                    dist = other.y - this.y;
+                    sameRoad = true;
+                }
+            } else if (this.dir === 0 && other.dir === 0) { // Both Up
+                if (Math.abs(other.x - this.x) < ROAD_WIDTH/2 && other.y < this.y) {
+                    dist = this.y - other.y;
+                    sameRoad = true;
+                }
+            }
+
+            if (sameRoad && dist < minDist) {
+                minDist = dist;
+            }
+        }
+        return minDist;
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, CAR_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Headlights/Taillights subtle effect
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        if(this.dir === 0) ctx.arc(this.x, this.y - CAR_RADIUS, 1, 0, Math.PI*2);
+        if(this.dir === 1) ctx.arc(this.x + CAR_RADIUS, this.y, 1, 0, Math.PI*2);
+        if(this.dir === 2) ctx.arc(this.x, this.y + CAR_RADIUS, 1, 0, Math.PI*2);
+        if(this.dir === 3) ctx.arc(this.x - CAR_RADIUS, this.y, 1, 0, Math.PI*2);
+        ctx.fill();
+    }
+}
+
+// --- Initialization ---
+
+function init() {
+    cars = [];
+    lights = [];
+    
+    // Create Lights at every intersection
+    for (let i = 0; i <= 10; i++) {
+        for (let j = 0; j <= 10; j++) {
+            lights.push(new TrafficLight(i, j));
+        }
+    }
+
+    // Create Cars
+    for (let i = 0; i < TOTAL_CARS; i++) {
+        cars.push(new Car());
+        // Pre-warm simulation so we don't start empty
+        // Advance cars randomly to fill screen
+        cars[i].x = Math.random() * WIDTH;
+        cars[i].y = Math.random() * HEIGHT;
+        // Adjust direction based on rough position to keep them on roads
+        // Simple heuristic: if on a horizontal road, go left or right. If vertical, up or down.
+        // For this simulation, we just let them spawn anywhere and they will correct or reset.
+        // Better: Snap to a random road.
+        if (Math.random() > 0.5) {
+            cars[i].x = getRoadX(Math.floor(Math.random()*11));
+            cars[i].dir = Math.random() > 0.5 ? 2 : 0;
+        } else {
+            cars[i].y = getRoadY(Math.floor(Math.random()*11));
+            cars[i].dir = Math.random() > 0.5 ? 1 : 3;
+        }
+    }
+
+    startTime = Date.now();
+    frameCount = 0;
+}
+
+// --- Main Loop ---
+
+function drawRoads() {
+    ctx.fillStyle = '#111'; // Road color
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // Draw vertical roads
+    for (let i = 0; i <= 10; i++) {
+        let x = getRoadX(i);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(x - ROAD_WIDTH/2, 0, ROAD_WIDTH, HEIGHT);
+        
+        // Lane markers
+        ctx.strokeStyle = '#444';
+        ctx.setLineDash([10, 10]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, HEIGHT);
+        ctx.stroke();
+    }
+
+    // Draw horizontal roads
+    for (let j = 0; j <= 10; j++) {
+        let y = getRoadY(j);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, y - ROAD_WIDTH/2, WIDTH, ROAD_WIDTH);
+
+        // Lane markers
+        ctx.strokeStyle = '#444';
+        ctx.setLineDash([10, 10]);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(WIDTH, y);
+        ctx.stroke();
+    }
+    
+    ctx.setLineDash([]);
+}
+
+function animate(timestamp) {
+    // Check restart
+    if (Date.now() - startTime > RESTART_INTERVAL) {
+        init();
+    }
+
+    // Update Logic
+    lights.forEach(l => l.update());
+    
+    // Sort cars for rendering? No, just update.
+    // We update cars in random order to prevent bias? 
+    // Standard array update is fine for this scale.
+    cars.forEach(c => c.update());
+
+    // Render
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    
+    drawRoads();
+    lights.forEach(l => l.draw(ctx));
+    cars.forEach(c => c.draw(ctx));
+
+    requestAnimationFrame(animate);
+}
+
+// Start
+init();
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>

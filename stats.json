@@ -1,0 +1,238 @@
+{
+  "flow": {
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 211,
+        "candidatesTokenCount": 2452,
+        "totalTokenCount": 4654,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 211
+          }
+        ],
+        "thoughtsTokenCount": 1991
+      },
+      "time_seconds": 44.2
+    },
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 193,
+        "completion_tokens": 2590,
+        "total_tokens": 2783,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 43.9
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 199,
+        "completion_tokens": 6618,
+        "total_tokens": 6817,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 4529
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 199
+      },
+      "time_seconds": 187.8
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 192,
+        "completion_tokens": 2998,
+        "total_tokens": 3190
+      },
+      "time_seconds": 61.1
+    }
+  },
+  "traffic": {
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 165,
+        "completion_tokens": 5869,
+        "total_tokens": 6034,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 105.6
+    },
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 187,
+        "candidatesTokenCount": 4205,
+        "totalTokenCount": 7360,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 187
+          }
+        ],
+        "thoughtsTokenCount": 2968
+      },
+      "time_seconds": 69.3
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 174,
+        "completion_tokens": 10257,
+        "total_tokens": 10431,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 4169
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 174
+      },
+      "time_seconds": 282.5
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 165,
+        "completion_tokens": 4612,
+        "total_tokens": 4777
+      },
+      "time_seconds": 80.2
+    }
+  },
+  "hexagon": {
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 147,
+        "completion_tokens": 3290,
+        "total_tokens": 3437,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 44.3
+    },
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 159,
+        "candidatesTokenCount": 2081,
+        "totalTokenCount": 4477,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 159
+          }
+        ],
+        "thoughtsTokenCount": 2237
+      },
+      "time_seconds": 42.8
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 156,
+        "completion_tokens": 2508,
+        "total_tokens": 2664,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 627
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 28
+      },
+      "time_seconds": 71.6
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 147,
+        "completion_tokens": 2353,
+        "total_tokens": 2500
+      },
+      "time_seconds": 43.0
+    }
+  },
+  "pendulum": {
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 178,
+        "completion_tokens": 2253,
+        "total_tokens": 2431,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 35.5
+    },
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 194,
+        "candidatesTokenCount": 2454,
+        "totalTokenCount": 5117,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 194
+          }
+        ],
+        "thoughtsTokenCount": 2469
+      },
+      "time_seconds": 48.4
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 185,
+        "completion_tokens": 3466,
+        "total_tokens": 3651,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 1791
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 57
+      },
+      "time_seconds": 98.8
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 177,
+        "completion_tokens": 2846,
+        "total_tokens": 3023
+      },
+      "time_seconds": 51.8
+    }
+  }
+}

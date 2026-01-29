@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Double Pendulum Simulation</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+        canvas {
+            display: block; /* Removes bottom spacing */
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="pendulumCanvas" width="500" height="670"></canvas>
+
+<script>
+    const canvas = document.getElementById('pendulumCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- Physics Constants & Parameters ---
+    // Real-world approximations (scaled for screen)
+    const g = 9.81;       // Gravity (m/s^2)
+    const L1 = 1.5;       // Length of first rod (m)
+    const L2 = 1.5;       // Length of second rod (m)
+    const m1 = 1.0;       // Mass 1 (kg)
+    const m2 = 1.0;       // Mass 2 (kg)
+    
+    // Scaling for canvas (pixels per meter)
+    // Canvas is 500px wide, 670px high.
+    // We want it to fit roughly in the middle.
+    const scale = 110; 
+    const originX = canvas.width / 2;
+    const originY = canvas.height / 3; // Pivot point higher up
+
+    // --- State Variables ---
+    let theta1 = Math.PI / 1.1; // Initial angle 1 (near top)
+    let theta2 = Math.PI / 1.1; // Initial angle 2 (near top)
+    let omega1 = 0.0;           // Initial angular velocity 1
+    let omega2 = 0.0;           // Initial angular velocity 2
+    let t = 0.0;                // Simulation time
+
+    // Trail history: {x, y, speed}
+    let trail = [];
+    const MAX_TRAIL_LENGTH = 400;
+
+    // --- Physics Engine ---
+
+    function calculateDerivatives(state) {
+        // Unpack state
+        let [th1, th2, w1, w2] = state;
+
+        // Differential equations for double pendulum
+        // Source: standard physics derivation
+        
+        let num1 = -g * (2 * m1 + m2) * Math.sin(th1);
+        let num2 = -m2 * g * Math.sin(th1 - 2 * th2);
+        let num3 = -2 * Math.sin(th1 - th2) * m2;
+        let num4 = (w2 * w2 * L2 + w1 * w1 * L1 * Math.cos(th1 - th2));
+        let den = L1 * (2 * m1 + m2 - m2 * Math.cos(2 * th1 - 2 * th2));
+        
+        let alpha1 = (num1 + num2 + num3 * num4) / den;
+
+        let num5 = 2 * Math.sin(th1 - th2);
+        let num6 = (w1 * w1 * L1 * (m1 + m2));
+        let num7 = g * (m1 + m2) * Math.cos(th1);
+        let num8 = w2 * w2 * L2 * m2 * Math.cos(th1 - th2);
+        let den2 = L2 * (2 * m1 + m2 - m2 * Math.cos(2 * th1 - 2 * th2));
+        
+        let alpha2 = (num5 * (num6 + num7 + num8)) / den2;
+
+        return [w1, w2, alpha1, alpha2];
+    }
+
+    // 4th Order Runge-Kutta Integration
+    function rk4(dt) {
+        let state = [theta1, theta2, omega1, omega2];
+
+        let k1 = calculateDerivatives(state);
+        
+        let state2 = [
+            state[0] + k1[0] * dt * 0.5, 
+            state[1] + k1[1] * dt * 0.5, 
+            state[2] + k1[2] * dt * 0.5, 
+            state[3] + k1[3] * dt * 0.5
+        ];
+        let k2 = calculateDerivatives(state2);
+
+        let state3 = [
+            state[0] + k2[0] * dt * 0.5, 
+            state[1] + k2[1] * dt * 0.5, 
+            state[2] + k2[2] * dt * 0.5, 
+            state[3] + k2[3] * dt * 0.5
+        ];
+        let k3 = calculateDerivatives(state3);
+
+        let state4 = [
+            state[0] + k3[0] * dt, 
+            state[1] + k3[1] * dt, 
+            state[2] + k3[2] * dt, 
+            state[3] + k3[3] * dt
+        ];
+        let k4 = calculateDerivatives(state4);
+
+        // Update state
+        theta1 += (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]) * dt / 6;
+        theta2 += (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]) * dt / 6;
+        omega1 += (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]) * dt / 6;
+        omega2 += (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]) * dt / 6;
+        
+        t += dt;
+    }
+
+    // --- Rendering ---
+
+    function getPosition() {
+        let x1 = originX + L1 * scale * Math.sin(theta1);
+        let y1 = originY + L1 * scale * Math.cos(theta1);
+        let x2 = x1 + L2 * scale * Math.sin(theta2);
+        let y2 = y1 + L2 * scale * Math.cos(theta2);
+        return { x1, y1, x2, y2 };
+    }
+
+    function resetSimulation() {
+        theta1 = Math.PI / 1.1; // Near top (180 degrees is PI)
+        theta2 = Math.PI / 1.1;
+        omega1 = 0;
+        omega2 = 0;
+        t = 0;
+        trail = [];
+    }
+
+    function draw() {
+        // Clear Canvas
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Physics Update
+        // Time step for physics. 
+        // Running physics at a fixed sub-step ensures stability regardless of frame rate.
+        // We want 60 FPS visual, but physics might need smaller steps.
+        const timeStep = 1/120; 
+        rk4(timeStep);
+
+        // Get current positions
+        const pos = getPosition();
+
+        // Calculate instantaneous angular speed for color mapping
+        // We use the angular velocity of the second pendulum (omega2) relative to the first?
+        // Or absolute angular velocity. Let's use magnitude of omega2 for color intensity.
+        const speed = Math.abs(omega2); 
+
+        // Store trail
+        trail.push({ x: pos.x2, y: pos.y2, speed: speed });
+        if (trail.length > MAX_TRAIL_LENGTH) {
+            trail.shift();
+        }
+
+        // --- Draw Trail ---
+        if (trail.length > 1) {
+            for (let i = 1; i < trail.length; i++) {
+                let p1 = trail[i - 1];
+                let p2 = trail[i];
+                
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                
+                // Color mapping based on speed
+                // Low speed = Purple/Blue (260 hue), High speed = Yellow/Red (60 hue)
+                // Normalize speed roughly (0 to ~15 rad/s is fast for this system)
+                let normSpeed = Math.min(p2.speed / 10, 1); 
+                let hue = 260 - (normSpeed * 200); // 260 -> 60
+                let lightness = 30 + (normSpeed * 40); // Darker when slow, brighter when fast
+                
+                ctx.strokeStyle = `hsla(${hue}, 100%, ${lightness}%, 0.8)`;
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+            }
+        }
+
+        // --- Draw Pendulum Rods ---
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 2;
+        
+        // Rod 1
+        ctx.beginPath();
+        ctx.moveTo(originX, originY);
+        ctx.lineTo(pos.x1, pos.y1);
+        ctx.stroke();
+
+        // Rod 2
+        ctx.beginPath();
+        ctx.moveTo(pos.x1, pos.y1);
+        ctx.lineTo(pos.x2, pos.y2);
+        ctx.stroke();
+
+        // --- Draw Masses ---
+        // Mass 1
+        ctx.fillStyle = '#AAAAAA';
+        ctx.beginPath();
+        ctx.arc(pos.x1, pos.y1, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Mass 2
+        ctx.fillStyle = '#FFFFFF';
+        ctx.beginPath();
+        ctx.arc(pos.x2, pos.y2, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // --- Pivot Point ---
+        ctx.fillStyle = '#555555';
+        ctx.beginPath();
+        ctx.arc(originX, originY, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // --- Check Reset Condition ---
+        if (t >= 10.0) {
+            resetSimulation();
+        }
+
+        requestAnimationFrame(draw);
+    }
+
+    // Handle resizing logic (though CSS keeps it centered, ensure internal logic is consistent)
+    // Since canvas size is fixed in HTML/CSS, we don't need complex resize logic here.
+    
+    // Start
+    requestAnimationFrame(draw);
+
+</script>
+</body>
+</html>

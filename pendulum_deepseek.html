@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
+  </style>
+</head>
+<body>
+<canvas id="pendulumCanvas" width="500" height="670"></canvas>
+
+<script>
+  const canvas = document.getElementById('pendulumCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Real-world parameters (SI units)
+  const g = 9.81; // gravity (m/s²)
+  const m1 = 1.0, m2 = 1.0; // masses (kg)
+  const l1 = 1.0, l2 = 1.0; // lengths (m)
+  const damping = 0.9999; // slight energy loss
+
+  // State variables
+  let theta1 = Math.PI * 0.99; // first angle (rad) - near top
+  let theta2 = Math.PI * 0.99; // second angle (rad)
+  let omega1 = 0.0; // angular velocity 1
+  let omega2 = 0.0; // angular velocity 2
+
+  // Simulation scaling (pixels per meter)
+  const scale = 150;
+  const pivotX = 250, pivotY = 200;
+
+  // Trail for second mass
+  const trail = [];
+  const maxTrailLength = 500;
+
+  // Color mapping for angular velocity
+  function velocityToColor(vel) {
+    const maxVel = 15; // rad/s
+    const absVel = Math.min(Math.abs(vel) / maxVel, 1.0);
+    const r = Math.floor(100 + 155 * absVel);
+    const g = Math.floor(100);
+    const b = Math.floor(255 - 155 * absVel);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  // Physics integration (Runge-Kutta 4th order)
+  function integrate(dt) {
+    function derivatives(state) {
+      const [t1, t2, w1, w2] = state;
+      const cosDiff = Math.cos(t1 - t2);
+      const sinDiff = Math.sin(t1 - t2);
+      
+      // Equations of motion for double pendulum
+      const denom = m1 + m2 * sinDiff * sinDiff;
+      const num1 = -g * (2 * m1 + m2) * Math.sin(t1) - m2 * g * Math.sin(t1 - 2 * t2) 
+                   - 2 * sinDiff * m2 * (w2 * w2 * l2 + w1 * w1 * l1 * cosDiff);
+      const num2 = 2 * sinDiff * (w1 * w1 * l1 * (m1 + m2) + g * (m1 + m2) * Math.cos(t1) 
+                   + w2 * w2 * l2 * m2 * cosDiff);
+      
+      const a1 = num1 / (l1 * denom);
+      const a2 = num2 / (l2 * denom);
+      
+      return [w1, w2, a1, a2];
+    }
+
+    function rk4Step(state, dt) {
+      const k1 = derivatives(state);
+      const k2 = derivatives(state.map((v, i) => v + k1[i] * dt / 2));
+      const k3 = derivatives(state.map((v, i) => v + k2[i] * dt / 2));
+      const k4 = derivatives(state.map((v, i) => v + k3[i] * dt));
+      
+      return state.map((v, i) => 
+        v + (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) * dt / 6
+      );
+    }
+
+    const state = [theta1, theta2, omega1, omega2];
+    const newState = rk4Step(state, dt);
+    
+    [theta1, theta2, omega1, omega2] = newState;
+    
+    // Apply slight damping
+    omega1 *= damping;
+    omega2 *= damping;
+  }
+
+  // Drawing functions
+  function drawPendulum() {
+    const x1 = pivotX + l1 * Math.sin(theta1) * scale;
+    const y1 = pivotY + l1 * Math.cos(theta1) * scale;
+    const x2 = x1 + l2 * Math.sin(theta2) * scale;
+    const y2 = y1 + l2 * Math.cos(theta2) * scale;
+
+    // Draw trail
+    trail.push({x: x2, y: y2, vel: omega2});
+    if (trail.length > maxTrailLength) trail.shift();
+
+    ctx.beginPath();
+    for (let i = 1; i < trail.length; i++) {
+      const p1 = trail[i-1];
+      const p2 = trail[i];
+      const gradient = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+      gradient.addColorStop(0, velocityToColor(p1.vel));
+      gradient.addColorStop(1, velocityToColor(p2.vel));
+      
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+
+    // Draw rods
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(pivotX, pivotY);
+    ctx.lineTo(x1, y1);
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    // Draw masses
+    ctx.fillStyle = '#888';
+    ctx.beginPath();
+    ctx.arc(x1, y1, 12, 0, Math.PI * 2);
+    ctx.fill();
+    
+    ctx.fillStyle = '#aaa';
+    ctx.beginPath();
+    ctx.arc(x2, y2, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw pivot
+    ctx.fillStyle = '#666';
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Animation loop
+  let lastTime = 0;
+  let startTime = Date.now();
+
+  function animate(currentTime) {
+    const elapsed = currentTime - lastTime;
+    lastTime = currentTime;
+    
+    // Restart every 10 seconds
+    if ((Date.now() - startTime) > 10000) {
+      theta1 = Math.PI * 0.99;
+      theta2 = Math.PI * 0.99;
+      omega1 = 0.0;
+      omega2 = 0.0;
+      trail.length = 0;
+      startTime = Date.now();
+    }
+
+    // Clear with slight fade effect
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Fixed timestep for stability
+    const dt = 0.016; // ~60 FPS
+    integrate(dt);
+    drawPendulum();
+
+    requestAnimationFrame(animate);
+  }
+
+  // Start animation
+  requestAnimationFrame((time) => {
+    lastTime = time;
+    animate(time);
+  });
+</script>
+</body>
+</html>

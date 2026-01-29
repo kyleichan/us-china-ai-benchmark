@@ -1,0 +1,210 @@
+<html>
+<head>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
+canvas {
+  image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+<canvas id="c" width="500" height="670"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 500;
+const H = 670;
+
+const GRAVITY = 0.4;
+const FRICTION = 0.99;
+const BOUNCE = 0.8;
+const BALL_RADIUS = 4;
+const BALL_COUNT = 8;
+const RESTART_TIME = 10000;
+
+class Vec2 {
+  constructor(x, y) { this.x = x; this.y = y; }
+  add(v) { return new Vec2(this.x + v.x, this.y + v.y); }
+  sub(v) { return new Vec2(this.x - v.x, this.y - v.y); }
+  mul(s) { return new Vec2(this.x * s, this.y * s); }
+  dot(v) { return this.x * v.x + this.y * v.y; }
+  len() { return Math.hypot(this.x, this.y); }
+  norm() { const l = this.len(); return l > 0 ? new Vec2(this.x / l, this.y / l) : new Vec2(0, 0); }
+  perp() { return new Vec2(-this.y, this.x); }
+}
+
+function pointToLineDistance(p, a, b) {
+  const ab = b.sub(a);
+  const ap = p.sub(a);
+  const abLen = ab.len();
+  if (abLen === 0) return ap.len();
+  const t = Math.max(0, Math.min(1, ap.dot(ab) / (abLen * abLen)));
+  const closest = a.add(ab.mul(t));
+  return p.sub(closest).len();
+}
+
+function reflect(v, n) {
+  return v.sub(n.mul(2 * v.dot(n)));
+}
+
+function getHexagonVertices(cx, cy, radius, rotation, gapIndex) {
+  const verts = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = rotation + (i * Math.PI / 3);
+    verts.push(new Vec2(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius));
+  }
+  return verts;
+}
+
+class Ball {
+  constructor(x, y) {
+    this.pos = new Vec2(x, y);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 3;
+    this.vel = new Vec2(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    this.radius = BALL_RADIUS;
+    this.active = true;
+    this.color = `hsl(${Math.random() * 60 + 300}, 100%, 60%)`;
+  }
+  
+  update() {
+    if (!this.active) return;
+    
+    this.vel.y += GRAVITY;
+    this.vel = this.vel.mul(FRICTION);
+    this.pos = this.pos.add(this.vel);
+    
+    if (this.pos.x < -50 || this.pos.x > W + 50 || this.pos.y < -50 || this.pos.y > H + 50) {
+      this.active = false;
+    }
+  }
+  
+  draw() {
+    if (!this.active) return;
+    ctx.beginPath();
+    ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+  }
+}
+
+class Hex {
+  constructor(cx, cy, radius, rotationSpeed, gapIndex, color) {
+    this.cx = cx;
+    this.cy = cy;
+    this.radius = radius;
+    this.rotation = 0;
+    this.rotationSpeed = rotationSpeed;
+    this.gapIndex = gapIndex;
+    this.color = color;
+    this.thickness = 3;
+  }
+  
+  update() {
+    this.rotation += this.rotationSpeed;
+  }
+  
+  getSegments() {
+    const verts = getHexagonVertices(this.cx, this.cy, this.radius, this.rotation, this.gapIndex);
+    const segments = [];
+    for (let i = 0; i < 6; i++) {
+      if (i === this.gapIndex) continue;
+      const next = (i + 1) % 6;
+      segments.push({ a: verts[i], b: verts[next], index: i });
+    }
+    return segments;
+  }
+  
+  draw() {
+    const verts = getHexagonVertices(this.cx, this.cy, this.radius, this.rotation, this.gapIndex);
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < 6; i++) {
+      if (i === this.gapIndex) continue;
+      if (!started) {
+        ctx.moveTo(verts[i].x, verts[i].y);
+        started = true;
+      } else {
+        ctx.lineTo(verts[i].x, verts[i].y);
+      }
+      const next = (i + 1) % 6;
+      if (next !== this.gapIndex) {
+        ctx.lineTo(verts[next].x, verts[next].y);
+      }
+    }
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.thickness;
+    ctx.stroke();
+  }
+}
+
+const hexes = [];
+const balls = [];
+let lastRestart = 0;
+
+function init() {
+  hexes.length = 0;
+  balls.length = 0;
+  
+  hexes.push(new Hex(W/2, H/2, 80, 0.015, 0, '#ff0080'));
+  hexes.push(new Hex(W/2, H/2, 140, -0.012, 2, '#00ff80'));
+  hexes.push(new Hex(W/2, H/2, 200, 0.009, 4, '#8000ff'));
+  
+  for (let i = 0; i < BALL_COUNT; i++) {
+    balls.push(new Ball(W/2, H/2));
+  }
+  
+  lastRestart = Date.now();
+}
+
+function checkCollision(ball, hex) {
+  if (!ball.active) return;
+  
+  const segments = hex.getSegments();
+  for (const seg of segments) {
+    const dist = pointToLineDistance(ball.pos, seg.a, seg.b);
+    if (dist < ball.radius + hex.thickness/2) {
+      const ab = seg.b.sub(seg.a);
+      const normal = ab.perp().norm();
+      const centerToLine = ball.pos.sub(seg.a.add(seg.b).mul(0.5));
+      if (centerToLine.dot(normal) < 0) {
+        normal.x = -normal.x;
+        normal.y = -normal.y;
+      }
+      
+      ball.vel = reflect(ball.vel, normal).mul(BOUNCE);
+      
+      const penetration = (ball.radius + hex.thickness/2) - dist;
+      ball.pos = ball.pos.add(normal.mul(penetration));
+    }
+  }
+}
+
+function animate() {
+  const now = Date.now();
+  if (now - lastRestart > RESTART_TIME) {
+    init();
+  }
+  
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  
+  hexes.forEach(hex => {
+    hex.update();
+    hex.draw();
+  });
+  
+  balls.forEach(ball => {
+    ball.update();
+    hexes.forEach(hex => checkCollision(ball, hex));
+    ball.draw();
+  });
+  
+  requestAnimationFrame(animate);
+}
+
+init();
+animate();
+</script>
+</body>
+</html>

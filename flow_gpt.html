@@ -1,0 +1,244 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c" width="500" height="670"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const W = canvas.width, H = canvas.height;
+
+  // ---- deterministic seed (single integer) ----
+  // Change this integer for a different reproducible animation.
+  const SEED = 1337;
+
+  // ---- PRNG: sfc32 seeded from xmur3 ----
+  function xmur3(str){
+    let h = 1779033703 ^ str.length;
+    for (let i=0;i<str.length;i++){
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function(){
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      return (h ^= (h >>> 16)) >>> 0;
+    }
+  }
+  function sfc32(a,b,c,d){
+    return function(){
+      a >>>= 0; b >>>= 0; c >>>= 0; d >>>= 0;
+      let t = (a + b) | 0;
+      a = b ^ (b >>> 9);
+      b = (c + (c << 3)) | 0;
+      c = (c << 21) | (c >>> 11);
+      d = (d + 1) | 0;
+      t = (t + d) | 0;
+      c = (c + t) | 0;
+      return (t >>> 0) / 4294967296;
+    }
+  }
+  const seedFn = xmur3(String(SEED));
+  const rand = sfc32(seedFn(), seedFn(), seedFn(), seedFn());
+
+  // ---- 3D Perlin noise (deterministic, no external libs) ----
+  // Permutation table
+  const perm = new Uint8Array(512);
+  const p = new Uint8Array(256);
+  for (let i=0;i<256;i++) p[i]=i;
+  for (let i=255;i>0;i--){
+    const j = (rand() * (i+1)) | 0;
+    const tmp = p[i]; p[i]=p[j]; p[j]=tmp;
+  }
+  for (let i=0;i<512;i++) perm[i]=p[i & 255];
+
+  function fade(t){ return t*t*t*(t*(t*6-15)+10); }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function grad(hash, x,y,z){
+    const h = hash & 15;
+    const u = h < 8 ? x : y;
+    const v = h < 4 ? y : (h === 12 || h === 14 ? x : z);
+    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+  }
+  function noise3(x,y,z){
+    let X = Math.floor(x) & 255;
+    let Y = Math.floor(y) & 255;
+    let Z = Math.floor(z) & 255;
+    x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+    const u = fade(x), v = fade(y), w = fade(z);
+
+    const A  = perm[X] + Y, AA = perm[A] + Z, AB = perm[A + 1] + Z;
+    const B  = perm[X + 1] + Y, BA = perm[B] + Z, BB = perm[B + 1] + Z;
+
+    const res = lerp(
+      lerp(
+        lerp(grad(perm[AA], x, y, z),     grad(perm[BA], x-1, y, z),     u),
+        lerp(grad(perm[AB], x, y-1, z),   grad(perm[BB], x-1, y-1, z),   u),
+        v
+      ),
+      lerp(
+        lerp(grad(perm[AA+1], x, y, z-1), grad(perm[BA+1], x-1, y, z-1), u),
+        lerp(grad(perm[AB+1], x, y-1, z-1),grad(perm[BB+1], x-1, y-1, z-1),u),
+        v
+      ),
+      w
+    );
+    // res in roughly [-1,1]
+    return res;
+  }
+
+  // ---- Curl noise in 2D from 3D noise (divergence-free) ----
+  // Using curl of a scalar potential: V = (dN/dy, -dN/dx)
+  function curl2(x,y,t){
+    const e = 0.0025; // finite difference step in noise space
+    const n1 = noise3(x, y + e, t);
+    const n2 = noise3(x, y - e, t);
+    const a = (n1 - n2) / (2*e); // dN/dy
+
+    const n3 = noise3(x + e, y, t);
+    const n4 = noise3(x - e, y, t);
+    const b = (n3 - n4) / (2*e); // dN/dx
+
+    // curl-like perpendicular gradient
+    return [a, -b];
+  }
+
+  // ---- Particles ----
+  const N = 2000;
+  const particles = new Array(N);
+  const speed = 1.15;          // constant pixel speed
+  const fieldScale = 0.0065;   // position -> noise space
+  const timeScale = 0.14;      // time -> noise space
+  const swirl = 0.22;          // small extra rotational component
+  const fadeAlpha = 0.085;     // trail fade per frame
+
+  function resetParticle(i){
+    particles[i] = {
+      x: rand() * W,
+      y: rand() * H,
+      px: 0, py: 0,
+      hue: (rand() * 360) | 0,
+      a: 0.75 + rand()*0.25
+    };
+    particles[i].px = particles[i].x;
+    particles[i].py = particles[i].y;
+  }
+  for (let i=0;i<N;i++) resetParticle(i);
+
+  // ---- Restart every 10 seconds (deterministic loop) ----
+  const LOOP = 10.0;
+  let start = performance.now();
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0,0,W,H);
+
+  function step(now){
+    const elapsed = (now - start) / 1000;
+    if (elapsed >= LOOP){
+      // deterministic restart to the same initial state
+      start = now;
+      // re-seed PRNG and permutation for exact reproducibility each loop
+      const seedFn2 = xmur3(String(SEED));
+      const rand2 = sfc32(seedFn2(), seedFn2(), seedFn2(), seedFn2());
+
+      // rebuild permutation identically
+      for (let i=0;i<256;i++) p[i]=i;
+      for (let i=255;i>0;i--){
+        const j = (rand2() * (i+1)) | 0;
+        const tmp = p[i]; p[i]=p[j]; p[j]=tmp;
+      }
+      for (let i=0;i<512;i++) perm[i]=p[i & 255];
+
+      // reset particles identically
+      // swap rand reference by copying state via closure trick: just rebind rand-like calls
+      // (we'll use randLocal below for reset only)
+      const randLocal = rand2;
+      for (let i=0;i<N;i++){
+        particles[i].x = randLocal() * W;
+        particles[i].y = randLocal() * H;
+        particles[i].px = particles[i].x;
+        particles[i].py = particles[i].y;
+        particles[i].hue = (randLocal() * 360) | 0;
+        particles[i].a = 0.75 + randLocal()*0.25;
+      }
+
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0,0,W,H);
+    }
+
+    // fade previous frame for trails
+    ctx.fillStyle = `rgba(0,0,0,${fadeAlpha})`;
+    ctx.fillRect(0,0,W,H);
+
+    // time parameter: smooth and looping
+    const tt = (elapsed / LOOP) * (Math.PI * 2);
+    // create a loop in noise-time by mapping to a circle in (t1,t2) and blending
+    // (keeps the field smooth across the 10s boundary)
+    const t1 = 2.0 + Math.cos(tt) * timeScale;
+    const t2 = 2.0 + Math.sin(tt) * timeScale;
+
+    ctx.lineWidth = 1;
+    ctx.globalCompositeOperation = "lighter";
+
+    for (let i=0;i<N;i++){
+      const ptl = particles[i];
+
+      const x = ptl.x, y = ptl.y;
+      ptl.px = x; ptl.py = y;
+
+      // sample curl noise (two time slices blended for extra smooth looping)
+      const nx = x * fieldScale;
+      const ny = y * fieldScale;
+
+      const c1 = curl2(nx, ny, t1);
+      const c2 = curl2(nx, ny, t2);
+
+      let vx = lerp(c1[0], c2[0], 0.5);
+      let vy = lerp(c1[1], c2[1], 0.5);
+
+      // add a small, time-varying rotational bias to keep circulation lively
+      // (also divergence-free-ish; it's a perpendicular of position-centered field)
+      const cx = (x - W*0.5) * 0.002;
+      const cy = (y - H*0.5) * 0.002;
+      const rot = Math.sin(tt*1.7) * swirl;
+      vx += -cy * rot;
+      vy +=  cx * rot;
+
+      // normalize to constant speed (no jitter)
+      const m = Math.hypot(vx, vy) || 1;
+      vx = (vx / m) * speed;
+      vy = (vy / m) * speed;
+
+      ptl.x = x + vx;
+      ptl.y = y + vy;
+
+      // wrap around edges seamlessly
+      if (ptl.x < 0) { ptl.x += W; ptl.px += W; }
+      else if (ptl.x >= W) { ptl.x -= W; ptl.px -= W; }
+      if (ptl.y < 0) { ptl.y += H; ptl.py += H; }
+      else if (ptl.y >= H) { ptl.y -= H; ptl.py -= H; }
+
+      // draw segment
+      ctx.strokeStyle = `hsla(${ptl.hue},100%,65%,${ptl.a})`;
+      ctx.beginPath();
+      ctx.moveTo(ptl.px, ptl.py);
+      ctx.lineTo(ptl.x, ptl.y);
+      ctx.stroke();
+    }
+
+    ctx.globalCompositeOperation = "source-over";
+    requestAnimationFrame(step);
+  }
+
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>

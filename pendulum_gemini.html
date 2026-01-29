@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+        }
+        canvas {
+            background-color: #000;
+            box-shadow: 0 0 20px rgba(0,0,0,1);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="c" width="500" height="670"></canvas>
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // Configuration
+        const PI = Math.PI;
+        const G = 9.81;
+        // Scale: 100 pixels = 1 meter
+        const SCALE = 120; 
+        
+        // Pendulum Parameters
+        // L in meters, M in kg
+        const L1 = 1.0; 
+        const L2 = 1.0; 
+        const M1 = 1.0; 
+        const M2 = 1.0;
+        
+        // Pivot position (centered)
+        const CX = width / 2;
+        const CY = height / 2.5;
+
+        // State: [theta1, omega1, theta2, omega2]
+        let state = [0, 0, 0, 0];
+        
+        // Trail storage
+        let trail = [];
+        const MAX_TRAIL = 150;
+
+        // Timing
+        let lastTime = 0;
+        let accumulator = 0;
+        let simTime = 0;
+        const TIME_STEP = 1 / 120; // Fixed physics step for stability
+        
+        // Reset timer
+        let cycleStartTime = 0;
+        const RESET_INTERVAL = 10000; // 10 seconds
+
+        function reset() {
+            // Start near the top (inverted) with slight offset to trigger chaos
+            state = [PI - 0.05, 0, PI - 0.05, 0];
+            trail = [];
+            simTime = 0;
+            cycleStartTime = performance.now();
+            
+            // Clear canvas immediately
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, width, height);
+        }
+
+        // Equations of motion for Double Pendulum
+        // Returns derivatives [dTheta1, dOmega1, dTheta2, dOmega2]
+        function getDerivatives(s) {
+            const t1 = s[0];
+            const w1 = s[1];
+            const t2 = s[2];
+            const w2 = s[3];
+
+            const dTheta1 = w1;
+            const dTheta2 = w2;
+
+            // Numerator and Denominator parts for angular acceleration equations
+            // Derived from Lagrangian mechanics
+            
+            // Equation for Omega1
+            const num1 = -G * (2 * M1 + M2) * Math.sin(t1);
+            const num2 = -M2 * G * Math.sin(t1 - 2 * t2);
+            const num3 = -2 * Math.sin(t1 - t2) * M2 * (w2 * w2 * L2 + w1 * w1 * L1 * Math.cos(t1 - t2));
+            const den1 = L1 * (2 * M1 + M2 - M2 * Math.cos(2 * t1 - 2 * t2));
+            
+            const dOmega1 = (num1 + num2 + num3) / den1;
+
+            // Equation for Omega2
+            const num4 = 2 * Math.sin(t1 - t2);
+            const num5 = (w1 * w1 * L1 * (M1 + M2));
+            const num6 = G * (M1 + M2) * Math.cos(t1);
+            const num7 = w2 * w2 * L2 * M2 * Math.cos(t1 - t2);
+            const den2 = L2 * (2 * M1 + M2 - M2 * Math.cos(2 * t1 - 2 * t2));
+
+            const dOmega2 = (num4 * (num5 + num6 + num7)) / den2;
+
+            return [dTheta1, dOmega1, dTheta2, dOmega2];
+        }
+
+        // Runge-Kutta 4th Order Integration
+        function integrate(s, dt) {
+            const k1 = getDerivatives(s);
+            
+            const s2 = [
+                s[0] + k1[0] * dt * 0.5,
+                s[1] + k1[1] * dt * 0.5,
+                s[2] + k1[2] * dt * 0.5,
+                s[3] + k1[3] * dt * 0.5
+            ];
+            const k2 = getDerivatives(s2);
+
+            const s3 = [
+                s[0] + k2[0] * dt * 0.5,
+                s[1] + k2[1] * dt * 0.5,
+                s[2] + k2[2] * dt * 0.5,
+                s[3] + k2[3] * dt * 0.5
+            ];
+            const k3 = getDerivatives(s3);
+
+            const s4 = [
+                s[0] + k3[0] * dt,
+                s[1] + k3[1] * dt,
+                s[2] + k3[2] * dt,
+                s[3] + k3[3] * dt
+            ];
+            const k4 = getDerivatives(s4);
+
+            return [
+                s[0] + (dt / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]),
+                s[1] + (dt / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]),
+                s[2] + (dt / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]),
+                s[3] + (dt / 6) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3])
+            ];
+        }
+
+        function draw() {
+            // Calculate coordinates
+            const x1 = CX + L1 * SCALE * Math.sin(state[0]);
+            const y1 = CY + L1 * SCALE * Math.cos(state[0]);
+            const x2 = x1 + L2 * SCALE * Math.sin(state[2]);
+            const y2 = y1 + L2 * SCALE * Math.cos(state[2]);
+
+            // Clear Background
+            ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Add point to trail
+            // Velocity magnitude estimate for color: simply taking w2
+            // A more physical speed would be |v|, but angular velocity creates nice color gradients
+            const speed = Math.abs(state[3]); 
+            trail.push({x: x2, y: y2, v: speed});
+            if (trail.length > MAX_TRAIL) trail.shift();
+
+            // Draw Trail
+            if (trail.length > 1) {
+                // Draw segments with distinct colors
+                ctx.lineWidth = 3;
+                for (let i = 0; i < trail.length - 1; i++) {
+                    const p1 = trail[i];
+                    const p2 = trail[i+1];
+                    
+                    // Color mapping: Blue (slow) -> Red (fast)
+                    // Hue: 240 (blue) -> 0 (red)
+                    // Clamp max speed for color roughly at 15 rad/s
+                    let hue = Math.max(0, 240 - (p1.v * 15));
+                    
+                    // Fade out tail
+                    const alpha = (i / trail.length);
+                    
+                    ctx.beginPath();
+                    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+            }
+
+            // Draw Rods
+            ctx.beginPath();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.moveTo(CX, CY);
+            ctx.lineTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+
+            // Draw Masses
+            ctx.fillStyle = '#fff';
+            
+            // Mass 1
+            ctx.beginPath();
+            ctx.arc(x1, y1, 8, 0, 2 * PI);
+            ctx.fill();
+
+            // Mass 2
+            ctx.beginPath();
+            ctx.arc(x2, y2, 8, 0, 2 * PI);
+            ctx.fill();
+        }
+
+        function loop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            const deltaTime = (timestamp - lastTime) / 1000; // seconds
+            lastTime = timestamp;
+
+            // Auto reset check
+            if (timestamp - cycleStartTime > RESET_INTERVAL) {
+                reset();
+            }
+
+            // Fixed time step accumulator for consistent physics
+            accumulator += deltaTime;
+            
+            // Cap accumulator to prevent spiral of death if frame rate drops
+            if (accumulator > 0.1) accumulator = 0.1;
+
+            while (accumulator >= TIME_STEP) {
+                state = integrate(state, TIME_STEP);
+                accumulator -= TIME_STEP;
+                simTime += TIME_STEP;
+            }
+
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // Initialize
+        reset();
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>
