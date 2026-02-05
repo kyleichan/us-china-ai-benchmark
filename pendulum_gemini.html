@@ -1,242 +1,118 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-        }
-        canvas {
-            background-color: #000;
-            box-shadow: 0 0 20px rgba(0,0,0,1);
-        }
-    </style>
-</head>
-<body>
-    <canvas id="c" width="500" height="670"></canvas>
-    <script>
-        const canvas = document.getElementById('c');
-        const ctx = canvas.getContext('2d');
-        const width = canvas.width;
-        const height = canvas.height;
+<body style="margin:0;background:#111;overflow:hidden;display:flex;justify-content:center;align-items:center;height:100vh;">
+<canvas id="c" style="background:#000;box-shadow:0 0 20px #000;"></canvas>
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+c.width = 250; c.height = 400;
 
-        // Configuration
-        const PI = Math.PI;
-        const G = 9.81;
-        // Scale: 100 pixels = 1 meter
-        const SCALE = 120; 
-        
-        // Pendulum Parameters
-        // L in meters, M in kg
-        const L1 = 1.0; 
-        const L2 = 1.0; 
-        const M1 = 1.0; 
-        const M2 = 1.0;
-        
-        // Pivot position (centered)
-        const CX = width / 2;
-        const CY = height / 2.5;
+// Physics Parameters (SI Units)
+const g = 9.81;
+const m1 = 1.0, m2 = 1.0;
+const l1 = 0.8, l2 = 0.8; // length in meters
+const scale = 100; // 100 pixels = 1 meter
 
-        // State: [theta1, omega1, theta2, omega2]
-        let state = [0, 0, 0, 0];
-        
-        // Trail storage
-        let trail = [];
-        const MAX_TRAIL = 150;
+// Initial State (Near top)
+let s = { t1: Math.PI - 0.01, t2: Math.PI + 0.01, w1: 0, w2: 0 };
+let trail = [];
+let lastTime = performance.now();
+let pushTimer = 0;
 
-        // Timing
-        let lastTime = 0;
-        let accumulator = 0;
-        let simTime = 0;
-        const TIME_STEP = 1 / 120; // Fixed physics step for stability
-        
-        // Reset timer
-        let cycleStartTime = 0;
-        const RESET_INTERVAL = 10000; // 10 seconds
+// Lagrangian derivatives
+function getDerivs(st) {
+    let {t1, t2, w1, w2} = st;
+    let d = 2 * m1 + m2 - m2 * Math.cos(2 * t1 - 2 * t2);
+    
+    let n1 = -g * (2 * m1 + m2) * Math.sin(t1) - m2 * g * Math.sin(t1 - 2 * t2) - 2 * Math.sin(t1 - t2) * m2 * (w2 * w2 * l2 + w1 * w1 * l1 * Math.cos(t1 - t2));
+    let n2 = 2 * Math.sin(t1 - t2) * (w1 * w1 * l1 * (m1 + m2) + g * (m1 + m2) * Math.cos(t1) + w2 * w2 * l2 * m2 * Math.cos(t1 - t2));
+    
+    return {
+        t1: w1, t2: w2,
+        w1: n1 / (l1 * d),
+        w2: n2 / (l2 * d)
+    };
+}
 
-        function reset() {
-            // Start near the top (inverted) with slight offset to trigger chaos
-            state = [PI - 0.05, 0, PI - 0.05, 0];
-            trail = [];
-            simTime = 0;
-            cycleStartTime = performance.now();
-            
-            // Clear canvas immediately
-            ctx.fillStyle = '#000';
-            ctx.fillRect(0, 0, width, height);
-        }
+// RK4 Integration
+function rk4(st, dt) {
+    let k1 = getDerivs(st);
+    let k2 = getDerivs({t1: st.t1 + k1.t1*dt/2, t2: st.t2 + k1.t2*dt/2, w1: st.w1 + k1.w1*dt/2, w2: st.w2 + k1.w2*dt/2});
+    let k3 = getDerivs({t1: st.t1 + k2.t1*dt/2, t2: st.t2 + k2.t2*dt/2, w1: st.w1 + k2.w1*dt/2, w2: st.w2 + k2.w2*dt/2});
+    let k4 = getDerivs({t1: st.t1 + k3.t1*dt, t2: st.t2 + k3.t2*dt, w1: st.w1 + k3.w1*dt, w2: st.w2 + k3.w2*dt});
+    
+    return {
+        t1: st.t1 + dt/6*(k1.t1 + 2*k2.t1 + 2*k3.t1 + k4.t1),
+        t2: st.t2 + dt/6*(k1.t2 + 2*k2.t2 + 2*k3.t2 + k4.t2),
+        w1: st.w1 + dt/6*(k1.w1 + 2*k2.w1 + 2*k3.w1 + k4.w1),
+        w2: st.w2 + dt/6*(k1.w2 + 2*k2.w2 + 2*k3.w2 + k4.w2)
+    };
+}
 
-        // Equations of motion for Double Pendulum
-        // Returns derivatives [dTheta1, dOmega1, dTheta2, dOmega2]
-        function getDerivatives(s) {
-            const t1 = s[0];
-            const w1 = s[1];
-            const t2 = s[2];
-            const w2 = s[3];
+function loop(now) {
+    let dt = (now - lastTime) / 1000;
+    if (dt > 0.05) dt = 0.05; // Cap dt for stability on tab switch
+    lastTime = now;
 
-            const dTheta1 = w1;
-            const dTheta2 = w2;
+    // Hard push every 10s
+    pushTimer += dt;
+    if (pushTimer >= 10) {
+        s.w1 += (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 5);
+        s.w2 += (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 5);
+        pushTimer = 0;
+    }
 
-            // Numerator and Denominator parts for angular acceleration equations
-            // Derived from Lagrangian mechanics
-            
-            // Equation for Omega1
-            const num1 = -G * (2 * M1 + M2) * Math.sin(t1);
-            const num2 = -M2 * G * Math.sin(t1 - 2 * t2);
-            const num3 = -2 * Math.sin(t1 - t2) * M2 * (w2 * w2 * L2 + w1 * w1 * L1 * Math.cos(t1 - t2));
-            const den1 = L1 * (2 * M1 + M2 - M2 * Math.cos(2 * t1 - 2 * t2));
-            
-            const dOmega1 = (num1 + num2 + num3) / den1;
+    // Physics sub-stepping
+    let steps = 8;
+    for(let i=0; i<steps; i++) s = rk4(s, dt/steps);
 
-            // Equation for Omega2
-            const num4 = 2 * Math.sin(t1 - t2);
-            const num5 = (w1 * w1 * L1 * (M1 + M2));
-            const num6 = G * (M1 + M2) * Math.cos(t1);
-            const num7 = w2 * w2 * L2 * M2 * Math.cos(t1 - t2);
-            const den2 = L2 * (2 * M1 + M2 - M2 * Math.cos(2 * t1 - 2 * t2));
+    // Coordinate calculation
+    let cx = 125, cy = 170;
+    let x1 = cx + l1 * scale * Math.sin(s.t1);
+    let y1 = cy + l1 * scale * Math.cos(s.t1);
+    let x2 = x1 + l2 * scale * Math.sin(s.t2);
+    let y2 = y1 + l2 * scale * Math.cos(s.t2);
 
-            const dOmega2 = (num4 * (num5 + num6 + num7)) / den2;
+    // Trail management
+    trail.push({x: x2, y: y2, v: Math.abs(s.w2)});
+    if (trail.length > 250) trail.shift();
 
-            return [dTheta1, dOmega1, dTheta2, dOmega2];
-        }
+    // Drawing
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; // Slight fade effect
+    ctx.fillRect(0, 0, c.width, c.height);
 
-        // Runge-Kutta 4th Order Integration
-        function integrate(s, dt) {
-            const k1 = getDerivatives(s);
-            
-            const s2 = [
-                s[0] + k1[0] * dt * 0.5,
-                s[1] + k1[1] * dt * 0.5,
-                s[2] + k1[2] * dt * 0.5,
-                s[3] + k1[3] * dt * 0.5
-            ];
-            const k2 = getDerivatives(s2);
-
-            const s3 = [
-                s[0] + k2[0] * dt * 0.5,
-                s[1] + k2[1] * dt * 0.5,
-                s[2] + k2[2] * dt * 0.5,
-                s[3] + k2[3] * dt * 0.5
-            ];
-            const k3 = getDerivatives(s3);
-
-            const s4 = [
-                s[0] + k3[0] * dt,
-                s[1] + k3[1] * dt,
-                s[2] + k3[2] * dt,
-                s[3] + k3[3] * dt
-            ];
-            const k4 = getDerivatives(s4);
-
-            return [
-                s[0] + (dt / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]),
-                s[1] + (dt / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]),
-                s[2] + (dt / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]),
-                s[3] + (dt / 6) * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3])
-            ];
-        }
-
-        function draw() {
-            // Calculate coordinates
-            const x1 = CX + L1 * SCALE * Math.sin(state[0]);
-            const y1 = CY + L1 * SCALE * Math.cos(state[0]);
-            const x2 = x1 + L2 * SCALE * Math.sin(state[2]);
-            const y2 = y1 + L2 * SCALE * Math.cos(state[2]);
-
-            // Clear Background
-            ctx.fillStyle = 'rgba(0, 0, 0, 1)';
-            ctx.fillRect(0, 0, width, height);
-
-            // Add point to trail
-            // Velocity magnitude estimate for color: simply taking w2
-            // A more physical speed would be |v|, but angular velocity creates nice color gradients
-            const speed = Math.abs(state[3]); 
-            trail.push({x: x2, y: y2, v: speed});
-            if (trail.length > MAX_TRAIL) trail.shift();
-
-            // Draw Trail
-            if (trail.length > 1) {
-                // Draw segments with distinct colors
-                ctx.lineWidth = 3;
-                for (let i = 0; i < trail.length - 1; i++) {
-                    const p1 = trail[i];
-                    const p2 = trail[i+1];
-                    
-                    // Color mapping: Blue (slow) -> Red (fast)
-                    // Hue: 240 (blue) -> 0 (red)
-                    // Clamp max speed for color roughly at 15 rad/s
-                    let hue = Math.max(0, 240 - (p1.v * 15));
-                    
-                    // Fade out tail
-                    const alpha = (i / trail.length);
-                    
-                    ctx.beginPath();
-                    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
-                    ctx.moveTo(p1.x, p1.y);
-                    ctx.lineTo(p2.x, p2.y);
-                    ctx.stroke();
-                }
-            }
-
-            // Draw Rods
+    // Draw Trail
+    if (trail.length > 1) {
+        for(let i=0; i<trail.length-1; i++) {
             ctx.beginPath();
-            ctx.strokeStyle = '#fff';
+            ctx.moveTo(trail[i].x, trail[i].y);
+            ctx.lineTo(trail[i+1].x, trail[i+1].y);
+            // Map angular velocity to Hue (Blue=Slow -> Red=Fast)
+            let hue = 240 - Math.min(trail[i].v * 12, 240);
+            ctx.strokeStyle = `hsl(${hue}, 100%, 50%)`;
             ctx.lineWidth = 2;
-            ctx.moveTo(CX, CY);
-            ctx.lineTo(x1, y1);
-            ctx.lineTo(x2, y2);
             ctx.stroke();
-
-            // Draw Masses
-            ctx.fillStyle = '#fff';
-            
-            // Mass 1
-            ctx.beginPath();
-            ctx.arc(x1, y1, 8, 0, 2 * PI);
-            ctx.fill();
-
-            // Mass 2
-            ctx.beginPath();
-            ctx.arc(x2, y2, 8, 0, 2 * PI);
-            ctx.fill();
         }
+    }
 
-        function loop(timestamp) {
-            if (!lastTime) lastTime = timestamp;
-            const deltaTime = (timestamp - lastTime) / 1000; // seconds
-            lastTime = timestamp;
+    // Draw Rods
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
 
-            // Auto reset check
-            if (timestamp - cycleStartTime > RESET_INTERVAL) {
-                reset();
-            }
+    // Draw Masses
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(x1, y1, 6, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 6, 0, 7); ctx.fill();
 
-            // Fixed time step accumulator for consistent physics
-            accumulator += deltaTime;
-            
-            // Cap accumulator to prevent spiral of death if frame rate drops
-            if (accumulator > 0.1) accumulator = 0.1;
-
-            while (accumulator >= TIME_STEP) {
-                state = integrate(state, TIME_STEP);
-                accumulator -= TIME_STEP;
-                simTime += TIME_STEP;
-            }
-
-            draw();
-            requestAnimationFrame(loop);
-        }
-
-        // Initialize
-        reset();
-        requestAnimationFrame(loop);
-
-    </script>
+    requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>

@@ -1,619 +1,310 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Traffic Simulation</title>
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-        }
-        
-        canvas {
-            display: block;
-        }
+        body { margin:0; padding:0; background:#111; }
+        canvas { display:block; }
     </style>
 </head>
 <body>
-    <canvas id="trafficCanvas" width="500" height="670"></canvas>
+<canvas id="trafficCanvas"></canvas>
+<script>
+const canvas = document.getElementById('trafficCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 250;
+canvas.height = 400;
 
-    <script>
-        // Canvas setup
-        const canvas = document.getElementById('trafficCanvas');
-        const ctx = canvas.getContext('2d');
+const GRID_SIZE = 10;
+const CELL_SIZE = Math.min(canvas.width, canvas.height) / (GRID_SIZE + 2);
+const ROAD_WIDTH = CELL_SIZE * 0.7;
+const LANE_OFFSET = ROAD_WIDTH / 4;
+
+const INTERSECTION_SIZE = CELL_SIZE;
+const VEHICLE_SIZE = CELL_SIZE * 0.3;
+const MAX_VEHICLES = 40;
+const SPAWN_RATE = 0.02;
+const MAX_SPEED = 1.5;
+const FOLLOW_DISTANCE = VEHICLE_SIZE * 1.5;
+const BRAKE_FACTOR = 0.9;
+const ACCELERATION = 0.05;
+
+class TrafficLight {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.state = Math.random() > 0.5 ? 'green' : 'red';
+        this.timer = 0;
+        this.cycleTime = 120 + Math.random() * 180;
+    }
+    update() {
+        this.timer++;
+        if (this.timer > this.cycleTime) {
+            this.state = this.state === 'green' ? 'red' : 'green';
+            this.timer = 0;
+        }
+    }
+    draw() {
+        ctx.save();
+        ctx.translate(this.x * CELL_SIZE + CELL_SIZE/2, this.y * CELL_SIZE + CELL_SIZE/2);
+        ctx.fillStyle = this.state === 'green' ? '#0f0' : '#f00';
+        ctx.beginPath();
+        ctx.arc(0, 0, CELL_SIZE/8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+}
+
+class Vehicle {
+    constructor() {
+        this.reset();
+        this.color = `hsl(${Math.random()*60 + 200}, 80%, 60%)`;
+    }
+    reset() {
+        const edge = Math.floor(Math.random() * 4);
+        let startX, startY, destX, destY;
         
-        // Grid configuration
-        const GRID_SIZE = 10;
-        const CELL_SIZE = 40;
-        const ROAD_WIDTH = 30;
-        const ROAD_OFFSET_X = (canvas.width - (CELL_SIZE * GRID_SIZE)) / 2;
-        const ROAD_OFFSET_Y = (canvas.height - (CELL_SIZE * GRID_SIZE)) / 2;
-        
-        // Traffic light configuration
-        const LIGHT_CYCLE = 300; // frames
-        const LIGHT_YELLOW_DURATION = 40; // frames
-        
-        // Vehicle configuration
-        const MAX_VEHICLES = 80;
-        const MAX_SPEED = 2.0;
-        const MIN_SPEED = 0.5;
-        const FOLLOW_DISTANCE = 20;
-        const BRAKE_DISTANCE = 25;
-        const VEHICLE_SIZE = 6;
-        
-        // Vehicle types with different colors and slightly different behaviors
-        const VEHICLE_TYPES = [
-            { color: '#3498db', speedMultiplier: 1.0, aggression: 0.8 },  // Blue - normal
-            { color: '#e74c3c', speedMultiplier: 1.2, aggression: 1.1 },  // Red - fast
-            { color: '#2ecc71', speedMultiplier: 0.9, aggression: 0.7 },  // Green - slow
-            { color: '#f39c12', speedMultiplier: 1.1, aggression: 0.9 }   // Orange - moderate
-        ];
-        
-        // Traffic lights array
-        const trafficLights = [];
-        
-        // Vehicles array
-        let vehicles = [];
-        
-        // Frame counter for animation restart
-        let frameCount = 0;
-        const RESTART_INTERVAL = 600; // 10 seconds at 60fps
-        
-        // Initialize traffic lights at intersections
-        function initTrafficLights() {
-            for (let x = 0; x < GRID_SIZE; x++) {
-                for (let y = 0; y < GRID_SIZE; y++) {
-                    // Create traffic light at each intersection
-                    trafficLights.push({
-                        x: x,
-                        y: y,
-                        // Alternate light patterns to create flow
-                        horizontalGreen: (x + y) % 2 === 0,
-                        cycleProgress: (x * 20 + y * 30) % LIGHT_CYCLE, // Offset each light
-                        isYellow: false,
-                        yellowTimer: 0
-                    });
-                }
-            }
+        switch(edge) {
+            case 0: 
+                startX = Math.floor(Math.random() * GRID_SIZE);
+                startY = 0;
+                destX = Math.floor(Math.random() * GRID_SIZE);
+                destY = GRID_SIZE - 1;
+                break;
+            case 1:
+                startX = GRID_SIZE - 1;
+                startY = Math.floor(Math.random() * GRID_SIZE);
+                destX = 0;
+                destY = Math.floor(Math.random() * GRID_SIZE);
+                break;
+            case 2:
+                startX = Math.floor(Math.random() * GRID_SIZE);
+                startY = GRID_SIZE - 1;
+                destX = Math.floor(Math.random() * GRID_SIZE);
+                destY = 0;
+                break;
+            case 3:
+                startX = 0;
+                startY = Math.floor(Math.random() * GRID_SIZE);
+                destX = GRID_SIZE - 1;
+                destY = Math.floor(Math.random() * GRID_SIZE);
+                break;
         }
         
-        // Update traffic lights
-        function updateTrafficLights() {
-            for (const light of trafficLights) {
-                light.cycleProgress = (light.cycleProgress + 1) % LIGHT_CYCLE;
-                
-                // Handle yellow light transition
-                if (light.isYellow) {
-                    light.yellowTimer++;
-                    if (light.yellowTimer >= LIGHT_YELLOW_DURATION) {
-                        light.isYellow = false;
-                        light.yellowTimer = 0;
-                        light.horizontalGreen = !light.horizontalGreen;
-                    }
-                } else {
-                    // Check if it's time to switch to yellow
-                    const timeInCycle = light.cycleProgress % LIGHT_CYCLE;
-                    const timeToChange = LIGHT_CYCLE / 2;
-                    
-                    if (timeInCycle === timeToChange - LIGHT_YELLOW_DURATION) {
-                        light.isYellow = true;
-                        light.yellowTimer = 0;
-                    }
-                }
+        this.x = startX * CELL_SIZE + CELL_SIZE/2;
+        this.y = startY * CELL_SIZE + CELL_SIZE/2;
+        this.destX = destX * CELL_SIZE + CELL_SIZE/2;
+        this.destY = destY * CELL_SIZE + CELL_SIZE/2;
+        this.vx = 0;
+        this.vy = 0;
+        this.speed = 0;
+        this.targetSpeed = MAX_SPEED;
+        this.path = this.calculatePath(startX, startY, destX, destY);
+        this.currentSegment = 0;
+        this.arrived = false;
+    }
+    
+    calculatePath(sx, sy, dx, dy) {
+        const path = [];
+        let cx = sx, cy = sy;
+        
+        while(cx !== dx || cy !== dy) {
+            if (cx < dx) {
+                path.push({x: cx + 1, y: cy, dir: 'right'});
+                cx++;
+            } else if (cx > dx) {
+                path.push({x: cx - 1, y: cy, dir: 'left'});
+                cx--;
+            } else if (cy < dy) {
+                path.push({x: cx, y: cy + 1, dir: 'down'});
+                cy++;
+            } else if (cy > dy) {
+                path.push({x: cx, y: cy - 1, dir: 'up'});
+                cy--;
             }
         }
+        return path;
+    }
+    
+    update(vehicles, lights) {
+        if (this.arrived) return;
         
-        // Initialize vehicles with random origins and destinations
-        function initVehicles(count) {
-            vehicles = [];
-            
-            for (let i = 0; i < count; i++) {
-                // Random road segment (not in buildings)
-                let startX, startY, direction;
-                
-                // Decide if vehicle starts on horizontal or vertical road
-                if (Math.random() > 0.5) {
-                    // Horizontal road
-                    startX = Math.floor(Math.random() * (GRID_SIZE - 1));
-                    startY = Math.floor(Math.random() * GRID_SIZE);
-                    direction = Math.random() > 0.5 ? 0 : Math.PI; // Right or left
-                } else {
-                    // Vertical road
-                    startX = Math.floor(Math.random() * GRID_SIZE);
-                    startY = Math.floor(Math.random() * (GRID_SIZE - 1));
-                    direction = Math.random() > 0.5 ? Math.PI/2 : 3*Math.PI/2; // Down or up
-                }
-                
-                // Random destination (different from start)
-                let destX, destY;
-                do {
-                    destX = Math.floor(Math.random() * GRID_SIZE);
-                    destY = Math.floor(Math.random() * GRID_SIZE);
-                } while (destX === startX && destY === startY);
-                
-                // Vehicle type
-                const type = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-                
-                vehicles.push({
-                    x: startX * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_X,
-                    y: startY * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_Y,
-                    direction: direction,
-                    speed: MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED),
-                    maxSpeed: MAX_SPEED * type.speedMultiplier,
-                    destX: destX,
-                    destY: destY,
-                    color: type.color,
-                    aggression: type.aggression,
-                    width: VEHICLE_SIZE,
-                    height: VEHICLE_SIZE * 1.5,
-                    // For lane changing behavior
-                    laneOffset: (Math.random() - 0.5) * 8,
-                    lastLaneChange: 0,
-                    // Route memory to avoid loops
-                    visitedIntersections: new Set()
-                });
-            }
-        }
+        const gridX = Math.floor(this.x / CELL_SIZE);
+        const gridY = Math.floor(this.y / CELL_SIZE);
         
-        // Get traffic light state for a specific position and direction
-        function getTrafficLightState(x, y, direction) {
-            // Find the relevant traffic light for this intersection
-            const gridX = Math.floor((x - ROAD_OFFSET_X) / CELL_SIZE);
-            const gridY = Math.floor((y - ROAD_OFFSET_Y) / CELL_SIZE);
+        if (this.currentSegment < this.path.length) {
+            const target = this.path[this.currentSegment];
+            const targetX = target.x * CELL_SIZE + CELL_SIZE/2;
+            const targetY = target.y * CELL_SIZE + CELL_SIZE/2;
             
-            // Check if we're at an intersection
-            const atIntersection = 
-                Math.abs((x - ROAD_OFFSET_X) % CELL_SIZE - CELL_SIZE/2) < 5 &&
-                Math.abs((y - ROAD_OFFSET_Y) % CELL_SIZE - CELL_SIZE/2) < 5;
+            let dx = targetX - this.x;
+            let dy = targetY - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
             
-            if (!atIntersection) return 'green'; // Not at an intersection
-            
-            const light = trafficLights.find(l => l.x === gridX && l.y === gridY);
-            if (!light) return 'green';
-            
-            // Determine if vehicle is moving horizontally or vertically
-            const isHorizontal = Math.abs(Math.cos(direction)) > 0.7;
-            
-            if (light.isYellow) {
-                return 'yellow';
-            } else if (isHorizontal && light.horizontalGreen) {
-                return 'green';
-            } else if (!isHorizontal && !light.horizontalGreen) {
-                return 'green';
+            if (dist < 2) {
+                this.currentSegment++;
             } else {
-                return 'red';
+                dx /= dist;
+                dy /= dist;
+                
+                this.vx = dx * this.speed;
+                this.vy = dy * this.speed;
             }
         }
         
-        // Calculate distance between two vehicles
-        function distance(v1, v2) {
-            return Math.sqrt((v1.x - v2.x)**2 + (v1.y - v2.y)**2);
+        if (Math.abs(this.x - this.destX) < 2 && Math.abs(this.y - this.destY) < 2) {
+            this.arrived = true;
+            return;
         }
         
-        // Find the closest vehicle ahead in the same lane
-        function getVehicleAhead(vehicle) {
-            let closest = null;
-            let minDistance = Infinity;
-            
-            for (const other of vehicles) {
-                if (other === vehicle) continue;
-                
-                // Check if vehicles are aligned in the same direction
-                const dirDiff = Math.abs(vehicle.direction - other.direction);
-                const isSameDirection = dirDiff < 0.2 || dirDiff > 2*Math.PI - 0.2;
-                
-                if (!isSameDirection) continue;
-                
-                // Check if other vehicle is ahead in the direction of travel
-                const dx = other.x - vehicle.x;
-                const dy = other.y - vehicle.y;
-                const angleToOther = Math.atan2(dy, dx);
-                const angleDiff = Math.abs(angleToOther - vehicle.direction);
-                
-                if (angleDiff < Math.PI/4 || angleDiff > 7*Math.PI/4) {
-                    const dist = distance(vehicle, other);
-                    if (dist < minDistance && dist < 100) { // Only consider nearby vehicles
-                        minDistance = dist;
-                        closest = other;
-                    }
-                }
+        const light = lights.find(l => 
+            Math.floor(l.x) === gridX && Math.floor(l.y) === gridY
+        );
+        
+        if (light && light.state === 'red') {
+            const distToLight = Math.sqrt(
+                Math.pow(this.x - (gridX * CELL_SIZE + CELL_SIZE/2), 2) +
+                Math.pow(this.y - (gridY * CELL_SIZE + CELL_SIZE/2), 2)
+            );
+            if (distToLight < CELL_SIZE * 0.8) {
+                this.targetSpeed = 0;
             }
-            
-            return { vehicle: closest, distance: minDistance };
+        } else {
+            this.targetSpeed = MAX_SPEED;
         }
         
-        // Update vehicle positions and behaviors
-        function updateVehicles() {
-            for (const vehicle of vehicles) {
-                // Store previous position for lane change smoothing
-                const prevX = vehicle.x;
-                const prevY = vehicle.y;
-                
-                // Check traffic light ahead
-                const lookAheadDistance = 40;
-                const checkX = vehicle.x + Math.cos(vehicle.direction) * lookAheadDistance;
-                const checkY = vehicle.y + Math.sin(vehicle.direction) * lookAheadDistance;
-                const lightState = getTrafficLightState(checkX, checkY, vehicle.direction);
-                
-                // Check for vehicle ahead
-                const { vehicle: vehicleAhead, distance: distanceToVehicle } = getVehicleAhead(vehicle);
-                
-                // Apply behavioral rules
-                let targetSpeed = vehicle.maxSpeed;
-                
-                // Slow down for red lights
-                if (lightState === 'red') {
-                    const stopDistance = Math.sqrt(
-                        (checkX - vehicle.x)**2 + (checkY - vehicle.y)**2
-                    );
-                    
-                    if (stopDistance < BRAKE_DISTANCE * 1.5) {
-                        targetSpeed = Math.max(MIN_SPEED, targetSpeed * (stopDistance / (BRAKE_DISTANCE * 2)));
-                    }
-                } else if (lightState === 'yellow') {
-                    // Caution for yellow lights
-                    targetSpeed *= 0.7;
-                }
-                
-                // Maintain safe following distance
-                if (vehicleAhead && distanceToVehicle < FOLLOW_DISTANCE * vehicle.aggression) {
-                    targetSpeed = Math.min(
-                        targetSpeed,
-                        vehicleAhead.speed * 0.9,
-                        MAX_SPEED * (distanceToVehicle / (FOLLOW_DISTANCE * vehicle.aggression))
-                    );
-                }
-                
-                // Adjust speed toward target
-                const acceleration = 0.05 * vehicle.aggression;
-                if (vehicle.speed < targetSpeed) {
-                    vehicle.speed = Math.min(vehicle.speed + acceleration, targetSpeed);
-                } else if (vehicle.speed > targetSpeed) {
-                    vehicle.speed = Math.max(vehicle.speed - acceleration * 1.5, targetSpeed);
-                }
-                
-                // Apply lane change occasionally to simulate natural flow
-                vehicle.lastLaneChange++;
-                if (vehicle.lastLaneChange > 120 && Math.random() < 0.01) {
-                    vehicle.laneOffset = (Math.random() - 0.5) * 10;
-                    vehicle.lastLaneChange = 0;
-                }
-                
-                // Calculate movement with lane offset
-                const moveX = Math.cos(vehicle.direction) * vehicle.speed;
-                const moveY = Math.sin(vehicle.direction) * vehicle.speed;
-                
-                // Apply perpendicular offset for lane position
-                const perpX = -Math.sin(vehicle.direction) * vehicle.laneOffset;
-                const perpY = Math.cos(vehicle.direction) * vehicle.laneOffset;
-                
-                // Update position
-                vehicle.x += moveX + perpX * 0.1;
-                vehicle.y += moveY + perpY * 0.1;
-                
-                // Keep vehicles on the road
-                const gridX = (vehicle.x - ROAD_OFFSET_X) / CELL_SIZE;
-                const gridY = (vehicle.y - ROAD_OFFSET_Y) / CELL_SIZE;
-                
-                // Check if at intersection for potential direction change
-                const atIntersection = 
-                    Math.abs((vehicle.x - ROAD_OFFSET_X) % CELL_SIZE - CELL_SIZE/2) < 5 &&
-                    Math.abs((vehicle.y - ROAD_OFFSET_Y) % CELL_SIZE - CELL_SIZE/2) < 5;
-                
-                if (atIntersection) {
-                    const intX = Math.round(gridX);
-                    const intY = Math.round(gridY);
-                    const intersectionKey = `${intX},${intY}`;
-                    
-                    // Only consider changing direction if we haven't been here recently
-                    if (!vehicle.visitedIntersections.has(intersectionKey)) {
-                        // Sometimes change direction toward destination
-                        const destDirX = vehicle.destX - intX;
-                        const destDirY = vehicle.destY - intY;
-                        
-                        // With some probability, change direction to move toward destination
-                        if (Math.random() < 0.3 && (destDirX !== 0 || destDirY !== 0)) {
-                            // Choose new direction that moves toward destination
-                            const possibleDirections = [];
-                            
-                            if (Math.abs(destDirX) > Math.abs(destDirY)) {
-                                possibleDirections.push(destDirX > 0 ? 0 : Math.PI);
-                                if (destDirY !== 0) possibleDirections.push(destDirY > 0 ? Math.PI/2 : 3*Math.PI/2);
-                            } else {
-                                possibleDirections.push(destDirY > 0 ? Math.PI/2 : 3*Math.PI/2);
-                                if (destDirX !== 0) possibleDirections.push(destDirX > 0 ? 0 : Math.PI);
-                            }
-                            
-                            // Also consider continuing straight
-                            possibleDirections.push(vehicle.direction);
-                            
-                            // Pick a random direction from possibilities
-                            vehicle.direction = possibleDirections[Math.floor(Math.random() * possibleDirections.length)];
-                            
-                            // Reset lane offset when changing direction
-                            vehicle.laneOffset = (Math.random() - 0.5) * 8;
-                        }
-                        
-                        // Remember this intersection
-                        vehicle.visitedIntersections.add(intersectionKey);
-                        
-                        // Limit memory to prevent infinite growth
-                        if (vehicle.visitedIntersections.size > 20) {
-                            const first = vehicle.visitedIntersections.values().next().value;
-                            vehicle.visitedIntersections.delete(first);
-                        }
-                    }
-                }
-                
-                // Remove vehicles that have reached their destination area
-                const destReached = 
-                    Math.abs(vehicle.x - (vehicle.destX * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_X)) < 15 &&
-                    Math.abs(vehicle.y - (vehicle.destY * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_Y)) < 15;
-                
-                if (destReached && Math.random() < 0.02) {
-                    // Give vehicle a new random destination
-                    do {
-                        vehicle.destX = Math.floor(Math.random() * GRID_SIZE);
-                        vehicle.destY = Math.floor(Math.random() * GRID_SIZE);
-                    } while (
-                        Math.abs(vehicle.x - (vehicle.destX * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_X)) < 50 &&
-                        Math.abs(vehicle.y - (vehicle.destY * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_Y)) < 50
-                    );
-                    
-                    vehicle.visitedIntersections.clear();
-                }
-                
-                // Keep vehicles within bounds
-                if (vehicle.x < ROAD_OFFSET_X) vehicle.x = ROAD_OFFSET_X;
-                if (vehicle.x > ROAD_OFFSET_X + CELL_SIZE * GRID_SIZE) vehicle.x = ROAD_OFFSET_X + CELL_SIZE * GRID_SIZE;
-                if (vehicle.y < ROAD_OFFSET_Y) vehicle.y = ROAD_OFFSET_Y;
-                if (vehicle.y > ROAD_OFFSET_Y + CELL_SIZE * GRID_SIZE) vehicle.y = ROAD_OFFSET_Y + CELL_SIZE * GRID_SIZE;
-            }
-            
-            // Occasionally add new vehicles to maintain traffic flow
-            if (vehicles.length < MAX_VEHICLES && Math.random() < 0.05) {
-                // Add a new vehicle
-                const startX = Math.floor(Math.random() * GRID_SIZE);
-                const startY = Math.floor(Math.random() * GRID_SIZE);
-                const type = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-                
-                vehicles.push({
-                    x: startX * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_X,
-                    y: startY * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_Y,
-                    direction: Math.random() * 2 * Math.PI,
-                    speed: MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED),
-                    maxSpeed: MAX_SPEED * type.speedMultiplier,
-                    destX: Math.floor(Math.random() * GRID_SIZE),
-                    destY: Math.floor(Math.random() * GRID_SIZE),
-                    color: type.color,
-                    aggression: type.aggression,
-                    width: VEHICLE_SIZE,
-                    height: VEHICLE_SIZE * 1.5,
-                    laneOffset: (Math.random() - 0.5) * 8,
-                    lastLaneChange: 0,
-                    visitedIntersections: new Set()
-                });
-            }
-        }
-        
-        // Draw the city grid
-        function drawGrid() {
-            // Draw background
-            ctx.fillStyle = '#1a1a2e';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw roads
-            ctx.fillStyle = '#2c3e50';
-            
-            // Horizontal roads
-            for (let y = 0; y <= GRID_SIZE; y++) {
-                ctx.fillRect(
-                    ROAD_OFFSET_X - ROAD_WIDTH/2,
-                    ROAD_OFFSET_Y + y * CELL_SIZE - ROAD_WIDTH/2,
-                    CELL_SIZE * GRID_SIZE + ROAD_WIDTH,
-                    ROAD_WIDTH
-                );
-            }
-            
-            // Vertical roads
-            for (let x = 0; x <= GRID_SIZE; x++) {
-                ctx.fillRect(
-                    ROAD_OFFSET_X + x * CELL_SIZE - ROAD_WIDTH/2,
-                    ROAD_OFFSET_Y - ROAD_WIDTH/2,
-                    ROAD_WIDTH,
-                    CELL_SIZE * GRID_SIZE + ROAD_WIDTH
-                );
-            }
-            
-            // Draw road markings
-            ctx.strokeStyle = '#ecf0f1';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([5, 10]);
-            
-            // Horizontal road center lines
-            for (let y = 0; y <= GRID_SIZE; y++) {
-                ctx.beginPath();
-                ctx.moveTo(ROAD_OFFSET_X, ROAD_OFFSET_Y + y * CELL_SIZE);
-                ctx.lineTo(ROAD_OFFSET_X + CELL_SIZE * GRID_SIZE, ROAD_OFFSET_Y + y * CELL_SIZE);
-                ctx.stroke();
-            }
-            
-            // Vertical road center lines
-            for (let x = 0; x <= GRID_SIZE; x++) {
-                ctx.beginPath();
-                ctx.moveTo(ROAD_OFFSET_X + x * CELL_SIZE, ROAD_OFFSET_Y);
-                ctx.lineTo(ROAD_OFFSET_X + x * CELL_SIZE, ROAD_OFFSET_Y + CELL_SIZE * GRID_SIZE);
-                ctx.stroke();
-            }
-            
-            ctx.setLineDash([]);
-            
-            // Draw buildings/blocks between roads
-            ctx.fillStyle = '#34495e';
-            for (let x = 0; x < GRID_SIZE; x++) {
-                for (let y = 0; y < GRID_SIZE; y++) {
-                    const buildingSize = CELL_SIZE - ROAD_WIDTH;
-                    if (buildingSize > 0) {
-                        ctx.fillRect(
-                            ROAD_OFFSET_X + x * CELL_SIZE + ROAD_WIDTH/2,
-                            ROAD_OFFSET_Y + y * CELL_SIZE + ROAD_WIDTH/2,
-                            buildingSize,
-                            buildingSize
-                        );
-                        
-                        // Add building details
-                        ctx.fillStyle = '#2c3e50';
-                        ctx.fillRect(
-                            ROAD_OFFSET_X + x * CELL_SIZE + ROAD_WIDTH/2 + 5,
-                            ROAD_OFFSET_Y + y * CELL_SIZE + ROAD_WIDTH/2 + 5,
-                            buildingSize - 10,
-                            buildingSize - 10
-                        );
-                        ctx.fillStyle = '#34495e';
+        let closestDist = Infinity;
+        for (const v of vehicles) {
+            if (v === this || v.arrived) continue;
+            const dx = v.x - this.x;
+            const dy = v.y - this.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist < FOLLOW_DISTANCE * 2 && dist < closestDist) {
+                const dot = (dx * this.vx + dy * this.vy) / (dist * this.speed || 1);
+                if (dot > 0.7) {
+                    closestDist = dist;
+                    if (dist < FOLLOW_DISTANCE) {
+                        this.targetSpeed = Math.max(0, v.speed * 0.8);
                     }
                 }
             }
         }
         
-        // Draw traffic lights
-        function drawTrafficLights() {
-            for (const light of trafficLights) {
-                const x = ROAD_OFFSET_X + light.x * CELL_SIZE;
-                const y = ROAD_OFFSET_Y + light.y * CELL_SIZE;
-                
-                // Draw light housing
-                ctx.fillStyle = '#2c3e50';
-                ctx.fillRect(x - 4, y - 4, 8, 8);
-                
-                // Determine light colors
-                let horizontalColor, verticalColor;
-                
-                if (light.isYellow) {
-                    horizontalColor = light.horizontalGreen ? '#f1c40f' : '#e74c3c';
-                    verticalColor = light.horizontalGreen ? '#e74c3c' : '#f1c40f';
-                } else {
-                    horizontalColor = light.horizontalGreen ? '#2ecc71' : '#e74c3c';
-                    verticalColor = light.horizontalGreen ? '#e74c3c' : '#2ecc71';
-                }
-                
-                // Draw horizontal direction light
-                ctx.fillStyle = horizontalColor;
-                ctx.beginPath();
-                ctx.arc(x - 8, y, 3, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Draw vertical direction light
-                ctx.fillStyle = verticalColor;
-                ctx.beginPath();
-                ctx.arc(x, y - 8, 3, 0, Math.PI * 2);
-                ctx.fill();
+        if (this.speed < this.targetSpeed) {
+            this.speed += ACCELERATION;
+        } else if (this.speed > this.targetSpeed) {
+            this.speed *= BRAKE_FACTOR;
+        }
+        this.speed = Math.max(0, Math.min(MAX_SPEED, this.speed));
+        
+        this.x += this.vx;
+        this.y += this.vy;
+    }
+    
+    draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        const angle = Math.atan2(this.vy, this.vx);
+        ctx.rotate(angle);
+        ctx.fillStyle = this.color;
+        ctx.fillRect(-VEHICLE_SIZE/2, -VEHICLE_SIZE/4, VEHICLE_SIZE, VEHICLE_SIZE/2);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(VEHICLE_SIZE/4, -VEHICLE_SIZE/6, VEHICLE_SIZE/4, VEHICLE_SIZE/3);
+        ctx.restore();
+    }
+}
+
+const lights = [];
+for (let x = 0; x < GRID_SIZE; x++) {
+    for (let y = 0; y < GRID_SIZE; y++) {
+        lights.push(new TrafficLight(x, y));
+    }
+}
+
+const vehicles = [];
+for (let i = 0; i < 15; i++) {
+    vehicles.push(new Vehicle());
+}
+
+function drawRoads() {
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = ROAD_WIDTH;
+    ctx.lineCap = 'square';
+    
+    for (let i = 0; i <= GRID_SIZE; i++) {
+        ctx.beginPath();
+        ctx.moveTo(CELL_SIZE/2, i * CELL_SIZE + CELL_SIZE/2);
+        ctx.lineTo(GRID_SIZE * CELL_SIZE + CELL_SIZE/2, i * CELL_SIZE + CELL_SIZE/2);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2, CELL_SIZE/2);
+        ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2, GRID_SIZE * CELL_SIZE + CELL_SIZE/2);
+        ctx.stroke();
+    }
+    
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 2;
+    for (let i = 0; i <= GRID_SIZE; i++) {
+        for (let j = 0; j <= GRID_SIZE; j++) {
+            ctx.beginPath();
+            ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2 - LANE_OFFSET, j * CELL_SIZE + CELL_SIZE/2);
+            ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2 + LANE_OFFSET, j * CELL_SIZE + CELL_SIZE/2);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2, j * CELL_SIZE + CELL_SIZE/2 - LANE_OFFSET);
+            ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2, j * CELL_SIZE + CELL_SIZE/2 + LANE_OFFSET);
+            ctx.stroke();
+        }
+    }
+}
+
+function update() {
+    for (const light of lights) light.update();
+    
+    for (const vehicle of vehicles) {
+        vehicle.update(vehicles, lights);
+    }
+    
+    for (let i = vehicles.length - 1; i >= 0; i--) {
+        if (vehicles[i].arrived) {
+            if (Math.random() < 0.02) {
+                vehicles[i] = new Vehicle();
+            } else if (vehicles.length > 15) {
+                vehicles.splice(i, 1);
             }
         }
-        
-        // Draw vehicles
-        function drawVehicles() {
-            for (const vehicle of vehicles) {
-                // Save context for rotation
-                ctx.save();
-                
-                // Move to vehicle position and rotate
-                ctx.translate(vehicle.x, vehicle.y);
-                ctx.rotate(vehicle.direction);
-                
-                // Draw vehicle body
-                ctx.fillStyle = vehicle.color;
-                ctx.fillRect(-vehicle.width/2, -vehicle.height/2, vehicle.width, vehicle.height);
-                
-                // Draw vehicle front (lighter color)
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(-vehicle.width/2 + 1, -vehicle.height/2 + 1, vehicle.width - 2, 3);
-                
-                // Draw vehicle highlights
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                ctx.fillRect(vehicle.width/2 - 2, -vehicle.height/2 + 1, 1, vehicle.height - 2);
-                
-                // Restore context
-                ctx.restore();
-                
-                // Draw destination indicator (small dot) - optional for debugging
-                /*
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-                ctx.beginPath();
-                ctx.arc(
-                    vehicle.destX * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_X,
-                    vehicle.destY * CELL_SIZE + CELL_SIZE/2 + ROAD_OFFSET_Y,
-                    3, 0, Math.PI * 2
-                );
-                ctx.fill();
-                */
-            }
-        }
-        
-        // Draw traffic density heatmap (subtle visualization)
-        function drawTrafficDensity() {
-            // Create a simple density map
-            const density = new Array(GRID_SIZE * GRID_SIZE).fill(0);
-            
-            for (const vehicle of vehicles) {
-                const gridX = Math.floor((vehicle.x - ROAD_OFFSET_X) / CELL_SIZE);
-                const gridY = Math.floor((vehicle.y - ROAD_OFFSET_Y) / CELL_SIZE);
-                
-                if (gridX >= 0 && gridX < GRID_SIZE && gridY >= 0 && gridY < GRID_SIZE) {
-                    density[gridY * GRID_SIZE + gridX]++;
-                }
-            }
-            
-            // Draw density overlay
-            for (let x = 0; x < GRID_SIZE; x++) {
-                for (let y = 0; y < GRID_SIZE; y++) {
-                    const count = density[y * GRID_SIZE + x];
-                    if (count > 0) {
-                        const alpha = Math.min(0.3, count * 0.05);
-                        ctx.fillStyle = `rgba(231, 76, 60, ${alpha})`;
-                        ctx.fillRect(
-                            ROAD_OFFSET_X + x * CELL_SIZE - ROAD_WIDTH/2,
-                            ROAD_OFFSET_Y + y * CELL_SIZE - ROAD_WIDTH/2,
-                            CELL_SIZE + ROAD_WIDTH,
-                            CELL_SIZE + ROAD_WIDTH
-                        );
-                    }
-                }
-            }
-        }
-        
-        // Main animation loop
-        function animate() {
-            // Clear canvas and draw everything
-            drawGrid();
-            drawTrafficDensity();
-            updateTrafficLights();
-            drawTrafficLights();
-            updateVehicles();
-            drawVehicles();
-            
-            // Increment frame count and restart simulation every 10 seconds
-            frameCount++;
-            if (frameCount >= RESTART_INTERVAL) {
-                frameCount = 0;
-                initVehicles(MAX_VEHICLES * 0.7); // Start with fewer vehicles
-            }
-            
-            // Continue animation
-            requestAnimationFrame(animate);
-        }
-        
-        // Initialize simulation
-        initTrafficLights();
-        initVehicles(MAX_VEHICLES * 0.7); // Start with 70% of max vehicles
-        
-        // Start animation
-        animate();
-    </script>
+    }
+    
+    if (vehicles.length < MAX_VEHICLES && Math.random() < SPAWN_RATE) {
+        vehicles.push(new Vehicle());
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.save();
+    const offsetX = (canvas.width - (GRID_SIZE * CELL_SIZE + CELL_SIZE)) / 2;
+    const offsetY = (canvas.height - (GRID_SIZE * CELL_SIZE + CELL_SIZE)) / 2;
+    ctx.translate(offsetX, offsetY);
+    
+    drawRoads();
+    for (const light of lights) light.draw();
+    for (const vehicle of vehicles) vehicle.draw();
+    
+    ctx.restore();
+}
+
+function animate() {
+    update();
+    draw();
+    requestAnimationFrame(animate);
+}
+
+animate();
+</script>
 </body>
 </html>

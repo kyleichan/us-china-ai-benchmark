@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="doublePendulum" width="250" height="400"></canvas>
+<script>
+const canvas = document.getElementById('doublePendulum');
+const ctx = canvas.getContext('2d');
+
+// Real-world parameters
+const g = 9.81; // gravity (m/s²)
+const L1 = 100; // length of first rod (pixels)
+const L2 = 100; // length of second rod (pixels)
+const m1 = 10;  // mass of first bob (kg)
+const m2 = 10;  // mass of second bob (kg)
+
+// Initial conditions - start near the top with some offset
+let theta1 = Math.PI / 2 + 0.1; // angle of first pendulum (radians)
+let theta2 = Math.PI / 2;       // angle of second pendulum (radians)
+let p1 = 0;                     // momentum of first pendulum
+let p2 = 0;                     // momentum of second pendulum
+
+// Trail for the second mass
+const trail = [];
+const maxTrailLength = 200;
+
+// Time tracking
+let lastTime = 0;
+let elapsedTime = 0;
+
+// Calculate angular velocities from momenta
+function calculateVelocities() {
+    const denom = (m1 + m2) * L1 * L2 - m2 * L2 * L2 * Math.cos(theta1 - theta2) * Math.cos(theta1 - theta2);
+    
+    const dtheta1 = (L2 * p1 - L1 * p2 * Math.cos(theta1 - theta2)) / denom;
+    const dtheta2 = (L1 * (m1 + m2) * p2 - L2 * m2 * p1 * Math.cos(theta1 - theta2)) / (L1 * denom);
+    
+    return { dtheta1, dtheta2 };
+}
+
+// Calculate derivatives for Runge-Kutta integration
+function derivatives(state) {
+    const [theta1, theta2, p1, p2] = state;
+    
+    const cosDiff = Math.cos(theta1 - theta2);
+    const sinDiff = Math.sin(theta1 - theta2);
+    const sinTheta1 = Math.sin(theta1);
+    const sinTheta2 = Math.sin(theta2);
+    
+    const denom = (m1 + m2) * L1 * L2 - m2 * L2 * L2 * cosDiff * cosDiff;
+    
+    const dtheta1 = (L2 * p1 - L1 * p2 * cosDiff) / denom;
+    const dtheta2 = (L1 * (m1 + m2) * p2 - L2 * m2 * p1 * cosDiff) / (L1 * denom);
+    
+    const dp1 = -(m1 + m2) * g * L1 * sinTheta1 - 
+                m2 * L1 * L2 * sinDiff * (dtheta2 * dtheta2 - dtheta1 * dtheta1 * cosDiff);
+                
+    const dp2 = -m2 * g * L2 * sinTheta2 + 
+                m2 * L1 * L2 * sinDiff * (dtheta1 * dtheta1 - dtheta2 * dtheta2 * cosDiff);
+    
+    return [dtheta1, dtheta2, dp1, dp2];
+}
+
+// 4th order Runge-Kutta integration
+function rk4(state, dt) {
+    const k1 = derivatives(state);
+    const tempState1 = state.map((val, i) => val + dt * 0.5 * k1[i]);
+    
+    const k2 = derivatives(tempState1);
+    const tempState2 = state.map((val, i) => val + dt * 0.5 * k2[i]);
+    
+    const k3 = derivatives(tempState2);
+    const tempState3 = state.map((val, i) => val + dt * k3[i]);
+    
+    const k4 = derivatives(tempState3);
+    
+    return state.map((val, i) => val + (dt / 6) * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]));
+}
+
+// Convert angles to positions
+function getPositions() {
+    const x1 = L1 * Math.sin(theta1);
+    const y1 = L1 * Math.cos(theta1);
+    const x2 = x1 + L2 * Math.sin(theta2);
+    const y2 = y1 + L2 * Math.cos(theta2);
+    
+    return { x1, y1, x2, y2 };
+}
+
+// Add a hard push to the system
+function applyPush() {
+    p1 += 50;
+    p2 += 30;
+}
+
+// Draw the pendulum
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const { x1, y1, x2, y2 } = getPositions();
+    
+    // Draw trail
+    if (trail.length > 1) {
+        for (let i = 1; i < trail.length; i++) {
+            const point = trail[i];
+            const prevPoint = trail[i-1];
+            
+            // Color based on angular velocity
+            const vel = point.vel;
+            const intensity = Math.min(Math.abs(vel) / 20, 1);
+            const r = Math.floor(255 * intensity);
+            const b = Math.floor(255 * (1 - intensity));
+            
+            ctx.beginPath();
+            ctx.moveTo(prevPoint.x + canvas.width/2, prevPoint.y + 50);
+            ctx.lineTo(point.x + canvas.width/2, point.y + 50);
+            ctx.strokeStyle = `rgb(${r}, 0, ${b})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+    }
+    
+    // Draw rods
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2, 50);
+    ctx.lineTo(x1 + canvas.width/2, y1 + 50);
+    ctx.lineTo(x2 + canvas.width/2, y2 + 50);
+    ctx.strokeStyle = 'black';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Draw masses
+    ctx.beginPath();
+    ctx.arc(x1 + canvas.width/2, y1 + 50, 8, 0, Math.PI * 2);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+    
+    ctx.beginPath();
+    ctx.arc(x2 + canvas.width/2, y2 + 50, 8, 0, Math.PI * 2);
+    ctx.fillStyle = 'blue';
+    ctx.fill();
+}
+
+// Animation loop
+function animate(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const deltaTime = (timestamp - lastTime) / 1000; // Convert to seconds
+    lastTime = timestamp;
+    
+    elapsedTime += deltaTime;
+    
+    // Apply push every 10 seconds
+    if (elapsedTime >= 10) {
+        applyPush();
+        elapsedTime = 0;
+    }
+    
+    // Update physics with small fixed time steps for stability
+    const steps = Math.ceil(deltaTime / 0.001);
+    const subDeltaTime = deltaTime / steps;
+    
+    for (let i = 0; i < steps; i++) {
+        const state = [theta1, theta2, p1, p2];
+        const newState = rk4(state, subDeltaTime);
+        
+        theta1 = newState[0];
+        theta2 = newState[1];
+        p1 = newState[2];
+        p2 = newState[3];
+    }
+    
+    // Add current position to trail
+    const { x2, y2 } = getPositions();
+    const { dtheta2 } = calculateVelocities();
+    
+    trail.push({ x: x2, y: y2, vel: dtheta2 });
+    
+    // Limit trail length
+    if (trail.length > maxTrailLength) {
+        trail.shift();
+    }
+    
+    draw();
+    requestAnimationFrame(animate);
+}
+
+// Start animation
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

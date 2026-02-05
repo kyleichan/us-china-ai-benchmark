@@ -1,210 +1,378 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<style>
-html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
-canvas {
-  image-rendering: pixelated;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nested Hexagon Physics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a; /* Slate 900 */
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #94a3b8;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .instruction {
+            font-size: 12px;
+            opacity: 0.7;
+            margin-top: 4px;
+        }
+    </style>
 </head>
 <body>
-<canvas id="c" width="500" height="670"></canvas>
-<script>
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-const W = 500;
-const H = 670;
 
-const GRAVITY = 0.4;
-const FRICTION = 0.99;
-const BOUNCE = 0.8;
-const BALL_RADIUS = 4;
-const BALL_COUNT = 8;
-const RESTART_TIME = 10000;
+    <!-- UI Overlay -->
+    <div id="ui">
+        <h1 class="text-xl font-bold text-cyan-400 tracking-widest">HEX-OUT</h1>
+        <div class="instruction">Balls escaping the void.</div>
+        <div class="instruction">Click to spawn burst.</div>
+    </div>
 
-class Vec2 {
-  constructor(x, y) { this.x = x; this.y = y; }
-  add(v) { return new Vec2(this.x + v.x, this.y + v.y); }
-  sub(v) { return new Vec2(this.x - v.x, this.y - v.y); }
-  mul(s) { return new Vec2(this.x * s, this.y * s); }
-  dot(v) { return this.x * v.x + this.y * v.y; }
-  len() { return Math.hypot(this.x, this.y); }
-  norm() { const l = this.len(); return l > 0 ? new Vec2(this.x / l, this.y / l) : new Vec2(0, 0); }
-  perp() { return new Vec2(-this.y, this.x); }
-}
+    <!-- Main Canvas -->
+    <canvas id="simCanvas"></canvas>
 
-function pointToLineDistance(p, a, b) {
-  const ab = b.sub(a);
-  const ap = p.sub(a);
-  const abLen = ab.len();
-  if (abLen === 0) return ap.len();
-  const t = Math.max(0, Math.min(1, ap.dot(ab) / (abLen * abLen)));
-  const closest = a.add(ab.mul(t));
-  return p.sub(closest).len();
-}
+    <script>
+        /**
+         * Configuration & Constants
+         */
+        const CONFIG = {
+            gravity: 0.15,
+            friction: 0.995, // Air resistance
+            wallBounciness: 0.7,
+            ballRadius: 4,
+            spawnRate: 20, // Frames between spawns
+            maxBalls: 300,
+            colors: ['#22d3ee', '#f472b6', '#a78bfa', '#34d399', '#fbbf24']
+        };
 
-function reflect(v, n) {
-  return v.sub(n.mul(2 * v.dot(n)));
-}
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
 
-function getHexagonVertices(cx, cy, radius, rotation, gapIndex) {
-  const verts = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = rotation + (i * Math.PI / 3);
-    verts.push(new Vec2(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius));
-  }
-  return verts;
-}
+        let width, height, cx, cy;
+        let balls = [];
+        let frame = 0;
 
-class Ball {
-  constructor(x, y) {
-    this.pos = new Vec2(x, y);
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 2 + Math.random() * 3;
-    this.vel = new Vec2(Math.cos(angle) * speed, Math.sin(angle) * speed);
-    this.radius = BALL_RADIUS;
-    this.active = true;
-    this.color = `hsl(${Math.random() * 60 + 300}, 100%, 60%)`;
-  }
-  
-  update() {
-    if (!this.active) return;
-    
-    this.vel.y += GRAVITY;
-    this.vel = this.vel.mul(FRICTION);
-    this.pos = this.pos.add(this.vel);
-    
-    if (this.pos.x < -50 || this.pos.x > W + 50 || this.pos.y < -50 || this.pos.y > H + 50) {
-      this.active = false;
-    }
-  }
-  
-  draw() {
-    if (!this.active) return;
-    ctx.beginPath();
-    ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
-    ctx.fillStyle = this.color;
-    ctx.fill();
-  }
-}
+        // Resize handling
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            cx = width / 2;
+            cy = height / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
-class Hex {
-  constructor(cx, cy, radius, rotationSpeed, gapIndex, color) {
-    this.cx = cx;
-    this.cy = cy;
-    this.radius = radius;
-    this.rotation = 0;
-    this.rotationSpeed = rotationSpeed;
-    this.gapIndex = gapIndex;
-    this.color = color;
-    this.thickness = 3;
-  }
-  
-  update() {
-    this.rotation += this.rotationSpeed;
-  }
-  
-  getSegments() {
-    const verts = getHexagonVertices(this.cx, this.cy, this.radius, this.rotation, this.gapIndex);
-    const segments = [];
-    for (let i = 0; i < 6; i++) {
-      if (i === this.gapIndex) continue;
-      const next = (i + 1) % 6;
-      segments.push({ a: verts[i], b: verts[next], index: i });
-    }
-    return segments;
-  }
-  
-  draw() {
-    const verts = getHexagonVertices(this.cx, this.cy, this.radius, this.rotation, this.gapIndex);
-    ctx.beginPath();
-    let started = false;
-    for (let i = 0; i < 6; i++) {
-      if (i === this.gapIndex) continue;
-      if (!started) {
-        ctx.moveTo(verts[i].x, verts[i].y);
-        started = true;
-      } else {
-        ctx.lineTo(verts[i].x, verts[i].y);
-      }
-      const next = (i + 1) % 6;
-      if (next !== this.gapIndex) {
-        ctx.lineTo(verts[next].x, verts[next].y);
-      }
-    }
-    ctx.strokeStyle = this.color;
-    ctx.lineWidth = this.thickness;
-    ctx.stroke();
-  }
-}
+        /**
+         * Vector Math Helpers
+         */
+        const Vec2 = {
+            add: (v1, v2) => ({ x: v1.x + v2.x, y: v1.y + v2.y }),
+            sub: (v1, v2) => ({ x: v1.x - v2.x, y: v1.y - v2.y }),
+            mul: (v, s) => ({ x: v.x * s, y: v.y * s }),
+            dot: (v1, v2) => v1.x * v2.x + v1.y * v2.y,
+            mag: (v) => Math.sqrt(v.x * v.x + v.y * v.y),
+            norm: (v) => {
+                const m = Math.sqrt(v.x * v.x + v.y * v.y);
+                return m === 0 ? { x: 0, y: 0 } : { x: v.x / m, y: v.y / m };
+            },
+            rotate: (v, angle) => ({
+                x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+                y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
+            }),
+            dist: (v1, v2) => Math.sqrt((v1.x - v2.x) ** 2 + (v1.y - v2.y) ** 2)
+        };
 
-const hexes = [];
-const balls = [];
-let lastRestart = 0;
+        /**
+         * Ball Class
+         */
+        class Ball {
+            constructor(x, y) {
+                this.pos = { x: x, y: y };
+                // Random velocity slightly outward
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 2 + 1;
+                this.vel = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
+                this.radius = CONFIG.ballRadius + Math.random() * 2;
+                this.color = CONFIG.colors[Math.floor(Math.random() * CONFIG.colors.length)];
+                this.active = true;
+                this.life = 1.0; // For fading out if needed
+            }
 
-function init() {
-  hexes.length = 0;
-  balls.length = 0;
-  
-  hexes.push(new Hex(W/2, H/2, 80, 0.015, 0, '#ff0080'));
-  hexes.push(new Hex(W/2, H/2, 140, -0.012, 2, '#00ff80'));
-  hexes.push(new Hex(W/2, H/2, 200, 0.009, 4, '#8000ff'));
-  
-  for (let i = 0; i < BALL_COUNT; i++) {
-    balls.push(new Ball(W/2, H/2));
-  }
-  
-  lastRestart = Date.now();
-}
+            update() {
+                if (!this.active) return;
 
-function checkCollision(ball, hex) {
-  if (!ball.active) return;
-  
-  const segments = hex.getSegments();
-  for (const seg of segments) {
-    const dist = pointToLineDistance(ball.pos, seg.a, seg.b);
-    if (dist < ball.radius + hex.thickness/2) {
-      const ab = seg.b.sub(seg.a);
-      const normal = ab.perp().norm();
-      const centerToLine = ball.pos.sub(seg.a.add(seg.b).mul(0.5));
-      if (centerToLine.dot(normal) < 0) {
-        normal.x = -normal.x;
-        normal.y = -normal.y;
-      }
-      
-      ball.vel = reflect(ball.vel, normal).mul(BOUNCE);
-      
-      const penetration = (ball.radius + hex.thickness/2) - dist;
-      ball.pos = ball.pos.add(normal.mul(penetration));
-    }
-  }
-}
+                // Apply physics
+                this.vel.y += CONFIG.gravity;
+                this.vel.x *= CONFIG.friction;
+                this.vel.y *= CONFIG.friction;
 
-function animate() {
-  const now = Date.now();
-  if (now - lastRestart > RESTART_TIME) {
-    init();
-  }
-  
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, W, H);
-  
-  hexes.forEach(hex => {
-    hex.update();
-    hex.draw();
-  });
-  
-  balls.forEach(ball => {
-    ball.update();
-    hexes.forEach(hex => checkCollision(ball, hex));
-    ball.draw();
-  });
-  
-  requestAnimationFrame(animate);
-}
+                this.pos = Vec2.add(this.pos, this.vel);
 
-init();
-animate();
-</script>
+                // Boundary check (Screen edges - remove if off screen)
+                if (this.pos.y > height + 50 || this.pos.x < -50 || this.pos.x > width + 50) {
+                    this.active = false;
+                }
+            }
+
+            draw(ctx) {
+                if (!this.active) return;
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        /**
+         * Hexagon Structure Class
+         */
+        class HexagonWall {
+            constructor(radius, speed, direction, color) {
+                this.radius = radius;
+                this.speed = speed;
+                this.direction = direction; // 1 or -1
+                this.color = color;
+                this.angle = 0;
+                // Define the gap index (0 is top right usually in standard math, but let's adjust)
+                // We want the gap at the bottom. 
+                // Vertices: 0..5. Let's say index 2 and 3 form the bottom segment?
+                // Let's orient 0 at angle -PI/2 (top).
+                // 0: Top
+                // 1: Top Right
+                // 2: Bottom Right
+                // 3: Bottom
+                // 4: Bottom Left
+                // 5: Top Left
+                // Let's remove the segment between index 2 and 3 (Bottom Right to Bottom) or 3 and 4?
+                // Let's remove index 3-4 (Bottom Center).
+                this.missingSegmentIndex = 3; 
+            }
+
+            update() {
+                this.angle += this.speed * this.direction * 0.01;
+            }
+
+            getVertices() {
+                const vertices = [];
+                for (let i = 0; i < 6; i++) {
+                    const theta = this.angle + (Math.PI / 3) * i - Math.PI / 2; // -PI/2 starts at top
+                    vertices.push({
+                        x: cx + this.radius * Math.cos(theta),
+                        y: cy + this.radius * Math.sin(theta)
+                    });
+                }
+                return vertices;
+            }
+
+            checkCollision(ball) {
+                const vertices = this.getVertices();
+                let collided = false;
+
+                // Check against 5 segments
+                for (let i = 0; i < 6; i++) {
+                    if (i === this.missingSegmentIndex) continue; // Skip the open door
+
+                    const p1 = vertices[i];
+                    const p2 = vertices[(i + 1) % 6];
+                    
+                    // Vector from p1 to p2
+                    const wallVec = Vec2.sub(p2, p1);
+                    // Vector from p1 to ball
+                    const ballVec = Vec2.sub(ball.pos, p1);
+                    
+                    // Project ball onto wall line to find closest point
+                    const wallLen = Vec2.mag(wallVec);
+                    const wallUnit = Vec2.norm(wallVec);
+                    
+                    // t is the projection scalar [0, 1] means on segment
+                    const t = Math.max(0, Math.min(1, Vec2.dot(ballVec, wallUnit) / wallLen));
+                    
+                    const closestPoint = Vec2.add(p1, Vec2.mul(wallVec, t));
+                    const distVec = Vec2.sub(ball.pos, closestPoint);
+                    const dist = Vec2.mag(distVec);
+
+                    if (dist < ball.radius) {
+                        // Collision detected!
+                        
+                        // Normal vector at collision point
+                        let normal = Vec2.norm(distVec);
+                        if (dist === 0) {
+                            // Rare case: ball center exactly on line, use perpendicular of wall
+                            normal = { x: -wallUnit.y, y: wallUnit.x };
+                        }
+
+                        // Push ball out of wall
+                        const overlap = ball.radius - dist;
+                        ball.pos = Vec2.add(ball.pos, Vec2.mul(normal, overlap));
+
+                        // Reflect velocity
+                        // v' = v - 2 * (v . n) * n
+                        const dot = Vec2.dot(ball.vel, normal);
+                        
+                        // Only reflect if moving towards the wall
+                        if (dot < 0) {
+                            const reflection = Vec2.mul(normal, 2 * dot);
+                            ball.vel = Vec2.sub(ball.vel, reflection);
+                            
+                            // Apply energy loss (bounciness)
+                            ball.vel = Vec2.mul(ball.vel, CONFIG.wallBounciness);
+                            
+                            // Add a tiny bit of "spin" influence from the rotating wall
+                            // Tangential velocity of the wall at collision point
+                            // v_wall = omega x r
+                            // For 2D: tangent is perpendicular to radius
+                            // This is a simplification to make it feel mechanical
+                            const tangent = { x: -normal.y, y: normal.x };
+                            const wallSpinVel = this.speed * this.direction * 0.05; 
+                            
+                            ball.vel.x += tangent.x * wallSpinVel;
+                            ball.vel.y += tangent.y * wallSpinVel;
+                            
+                            collided = true;
+                        }
+                    }
+                }
+                return collided;
+            }
+
+            draw(ctx) {
+                const vertices = this.getVertices();
+                ctx.beginPath();
+                // Draw the 5 segments
+                for (let i = 0; i < 6; i++) {
+                    if (i === this.missingSegmentIndex) continue;
+                    const p1 = vertices[i];
+                    const p2 = vertices[(i + 1) % 6];
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                }
+                
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+
+                // Draw joints for visual flair
+                ctx.fillStyle = '#fff';
+                for (let i = 0; i < 6; i++) {
+                    if (i === this.missingSegmentIndex || i === (this.missingSegmentIndex + 1) % 6) continue;
+                    const p = vertices[i];
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Initialize Hexagons
+        const hexagons = [
+            new HexagonWall(120, 1.5, 1, '#38bdf8'),   // Outer - Cyan
+            new HexagonWall(75, 2.0, -1, '#e879f9'),  // Middle - Fuchsia
+            new HexagonWall(35, 2.5, 1, '#34d399')    // Inner - Emerald
+        ];
+
+        /**
+         * Main Loop
+         */
+        function loop() {
+            // Clear
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.4)'; // Trail effect
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw Background Grid (Subtle)
+            ctx.strokeStyle = '#1e293b';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for(let x=0; x<width; x+=50) { ctx.moveTo(x,0); ctx.lineTo(x,height); }
+            for(let y=0; y<height; y+=50) { ctx.moveTo(0,y); ctx.lineTo(width,y); }
+            ctx.stroke();
+
+            // Update & Draw Hexagons
+            hexagons.forEach(hex => {
+                hex.update();
+                hex.draw(ctx);
+            });
+
+            // Spawn Balls
+            if (frame % CONFIG.spawnRate === 0 && balls.length < CONFIG.maxBalls) {
+                // Spawn in center with slight jitter
+                const jitter = 5;
+                balls.push(new Ball(
+                    cx + (Math.random() - 0.5) * jitter, 
+                    cy + (Math.random() - 0.5) * jitter
+                ));
+            }
+
+            // Update & Draw Balls
+            for (let i = balls.length - 1; i >= 0; i--) {
+                const b = balls[i];
+                
+                // Physics Checks (Inner to Outer)
+                // We check collisions. 
+                // Optimization: Only check if inside radius range?
+                // For simplicity, check all. Order matters for stability.
+                // Check inner walls first.
+                
+                // 1. Check Hexagon Collisions
+                // Note: We check ALL walls every frame. 
+                // If a ball is inside the small one, it might hit the small one.
+                // If it passes the small one, it hits the middle, etc.
+                
+                // To handle "inside" vs "outside" simply:
+                // The collision logic above pushes the ball OUT of the line segment.
+                // If the ball is inside the hexagon, it works.
+                // If the ball is outside the hexagon, it also works (pushes it back in).
+                // To allow escape through the gap, we just don't have a wall there.
+                
+                // We must check the smallest wall first if the ball is inside it, 
+                // otherwise it might tunnel through the larger one if checked first?
+                // Actually, the standard segment check works regardless of "side".
+                
+                hexagons.forEach(hex => hex.checkCollision(b));
+                
+                b.update();
+                b.draw(ctx);
+
+                if (!b.active) {
+                    balls.splice(i, 1);
+                }
+            }
+
+            // Draw Center Glow
+            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 100);
+            gradient.addColorStop(0, 'rgba(56, 189, 248, 0.1)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0,0,width,height);
+
+            frame++;
+            requestAnimationFrame(loop);
+        }
+
+        // Interaction
+        window.addEventListener('mousedown', (e) => {
+            for(let i=0; i<5; i++) {
+                balls.push(new Ball(cx + (Math.random()-0.5)*20, cy + (Math.random()-0.5)*20));
+            }
+        });
+
+        // Start
+        loop();
+
+    </script>
 </body>
 </html>

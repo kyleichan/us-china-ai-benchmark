@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Block Stacker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 10px;
+            background: #2c3e50;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            width: 200px;
+            height: 300px;
+            background: #ecf0f1;
+            border-radius: 5px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            border: 2px solid #34495e;
+        }
+        #ground {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 20px;
+            background: #27ae60;
+            border-top: 2px solid #2ecc71;
+        }
+        .block {
+            position: absolute;
+            cursor: move;
+            border-radius: 2px;
+            box-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+            transition: transform 0.1s;
+        }
+        #ui {
+            color: white;
+            margin: 10px 0;
+            font-size: 12px;
+            text-align: center;
+        }
+        #earthquakeWarning {
+            color: #e74c3c;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #instructions {
+            color: #bdc3c7;
+            font-size: 10px;
+            max-width: 200px;
+            text-align: center;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        Stack the blocks!<br>
+        Tower height: <span id="height">0</span>px
+        <div id="earthquakeWarning">EARTHQUAKE!</div>
+    </div>
+    <div id="gameContainer">
+        <div id="ground"></div>
+    </div>
+    <div id="instructions">Drag blocks to stack. Keep tower balanced!</div>
+
+    <script>
+        (function() {
+            const container = document.getElementById('gameContainer');
+            const heightDisplay = document.getElementById('height');
+            const warning = document.getElementById('earthquakeWarning');
+            const groundHeight = 20;
+            const containerWidth = 200;
+            const containerHeight = 300;
+            
+            let blocks = [];
+            let draggedBlock = null;
+            let dragOffset = {x:0, y:0};
+            let earthquakeActive = false;
+            let earthquakeTimer;
+            let physicsTimer;
+            
+            function createBlocks() {
+                const colors = ['#e74c3c', '#3498db', '#f39c12', '#9b59b6', '#1abc9c', 
+                               '#d35400', '#c0392b', '#2980b9', '#f1c40f', '#8e44ad'];
+                
+                for(let i=0; i<10; i++) {
+                    const block = document.createElement('div');
+                    block.className = 'block';
+                    
+                    const width = 20 + Math.random() * 40;
+                    const height = 15 + Math.random() * 25;
+                    
+                    block.style.width = width + 'px';
+                    block.style.height = height + 'px';
+                    block.style.backgroundColor = colors[i % colors.length];
+                    
+                    const x = Math.random() * (containerWidth - width);
+                    const y = containerHeight - groundHeight - height - (i * 5);
+                    
+                    block.style.left = x + 'px';
+                    block.style.top = y + 'px';
+                    
+                    block.dataset.width = width;
+                    block.dataset.height = height;
+                    block.dataset.x = x;
+                    block.dataset.y = y;
+                    block.dataset.placed = 'false';
+                    
+                    container.appendChild(block);
+                    blocks.push(block);
+                    
+                    block.addEventListener('mousedown', startDrag);
+                }
+            }
+            
+            function startDrag(e) {
+                draggedBlock = e.target;
+                draggedBlock.style.zIndex = '1000';
+                draggedBlock.dataset.placed = 'false';
+                
+                const rect = draggedBlock.getBoundingClientRect();
+                dragOffset.x = e.clientX - rect.left;
+                dragOffset.y = e.clientY - rect.top;
+                
+                document.addEventListener('mousemove', drag);
+                document.addEventListener('mouseup', stopDrag);
+            }
+            
+            function drag(e) {
+                if(!draggedBlock) return;
+                
+                let x = e.clientX - container.getBoundingClientRect().left - dragOffset.x;
+                let y = e.clientY - container.getBoundingClientRect().top - dragOffset.y;
+                
+                x = Math.max(0, Math.min(x, containerWidth - parseFloat(draggedBlock.dataset.width)));
+                y = Math.max(0, Math.min(y, containerHeight - groundHeight - parseFloat(draggedBlock.dataset.height)));
+                
+                draggedBlock.style.left = x + 'px';
+                draggedBlock.style.top = y + 'px';
+                draggedBlock.dataset.x = x;
+                draggedBlock.dataset.y = y;
+            }
+            
+            function stopDrag() {
+                if(!draggedBlock) return;
+                
+                document.removeEventListener('mousemove', drag);
+                document.removeEventListener('mouseup', stopDrag);
+                
+                applyPhysics(draggedBlock);
+                draggedBlock.style.zIndex = '1';
+                draggedBlock = null;
+                
+                updateTowerHeight();
+            }
+            
+            function applyPhysics(block) {
+                let placed = false;
+                let blockBottom = parseFloat(block.dataset.y) + parseFloat(block.dataset.height);
+                
+                if(blockBottom >= containerHeight - groundHeight) {
+                    block.dataset.y = containerHeight - groundHeight - parseFloat(block.dataset.height);
+                    block.style.top = block.dataset.y + 'px';
+                    block.dataset.placed = 'true';
+                    placed = true;
+                }
+                
+                blocks.forEach(otherBlock => {
+                    if(otherBlock === block || otherBlock.dataset.placed !== 'true') return;
+                    
+                    const otherTop = parseFloat(otherBlock.dataset.y);
+                    const otherLeft = parseFloat(otherBlock.dataset.x);
+                    const otherRight = otherLeft + parseFloat(otherBlock.dataset.width);
+                    
+                    const blockLeft = parseFloat(block.dataset.x);
+                    const blockRight = blockLeft + parseFloat(block.dataset.width);
+                    
+                    if(blockBottom >= otherTop && blockBottom <= otherTop + 10) {
+                        const overlapLeft = Math.max(blockLeft, otherLeft);
+                        const overlapRight = Math.min(blockRight, otherRight);
+                        const overlap = overlapRight - overlapLeft;
+                        
+                        if(overlap > parseFloat(block.dataset.width) * 0.3) {
+                            block.dataset.y = otherTop - parseFloat(block.dataset.height);
+                            block.style.top = block.dataset.y + 'px';
+                            block.dataset.placed = 'true';
+                            placed = true;
+                        }
+                    }
+                });
+                
+                if(!placed) {
+                    block.dataset.placed = 'false';
+                }
+            }
+            
+            function updateTowerHeight() {
+                let lowestY = containerHeight;
+                
+                blocks.forEach(block => {
+                    if(block.dataset.placed === 'true') {
+                        lowestY = Math.min(lowestY, parseFloat(block.dataset.y));
+                    }
+                });
+                
+                const towerHeight = containerHeight - groundHeight - lowestY;
+                heightDisplay.textContent = Math.max(0, Math.round(towerHeight));
+            }
+            
+            function earthquake() {
+                earthquakeActive = true;
+                warning.style.opacity = '1';
+                
+                const intensity = 5;
+                let shakes = 0;
+                const maxShakes = 20;
+                
+                function shake() {
+                    blocks.forEach(block => {
+                        if(block.dataset.placed === 'true') {
+                            const currentX = parseFloat(block.dataset.x);
+                            const newX = currentX + (Math.random() - 0.5) * intensity * 2;
+                            const boundedX = Math.max(0, Math.min(newX, 
+                                containerWidth - parseFloat(block.dataset.width)));
+                            
+                            block.dataset.x = boundedX;
+                            block.style.left = boundedX + 'px';
+                            
+                            applyPhysics(block);
+                        }
+                    });
+                    
+                    shakes++;
+                    if(shakes < maxShakes) {
+                        setTimeout(shake, 50);
+                    } else {
+                        earthquakeActive = false;
+                        warning.style.opacity = '0';
+                    }
+                }
+                
+                shake();
+                updateTowerHeight();
+            }
+            
+            function physicsLoop() {
+                if(earthquakeActive) return;
+                
+                blocks.forEach(block => {
+                    if(block.dataset.placed === 'false' && block !== draggedBlock) {
+                        let newY = parseFloat(block.dataset.y) + 2;
+                        block.dataset.y = newY;
+                        block.style.top = newY + 'px';
+                        applyPhysics(block);
+                    }
+                });
+                
+                updateTowerHeight();
+            }
+            
+            function init() {
+                createBlocks();
+                
+                earthquakeTimer = setInterval(() => {
+                    earthquake();
+                }, 8000);
+                
+                physicsTimer = setInterval(physicsLoop, 50);
+                
+                updateTowerHeight();
+            }
+            
+            init();
+        })();
+    </script>
+</body>
+</html>

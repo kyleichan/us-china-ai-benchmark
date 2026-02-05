@@ -3,264 +3,430 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Deterministic Flow Field</title>
+    <title>Interactive Flow Field</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
+        body { margin: 0; overflow: hidden; background-color: #0f172a; }
+        canvas { display: block; }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        input[type=range] {
+            -webkit-appearance: none;
             width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-            overflow: hidden; /* Prevent scrollbars */
+            background: transparent;
         }
-        canvas {
-            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #38bdf8;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
         }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+        }
+        /* Custom scrollbar for controls if needed */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
     </style>
 </head>
-<body>
+<body class="text-slate-200 font-sans antialiased">
 
-<canvas id="flowCanvas" width="500" height="670"></canvas>
+    <!-- Canvas Layer -->
+    <canvas id="flowCanvas" class="absolute top-0 left-0 w-full h-full z-0"></canvas>
 
-<script>
-/**
- * Deterministic Simplex Noise
- * Based on standard implementation, adapted for seeded determinism using an LCG.
- */
-class SimplexNoise {
-    constructor(seed = 0) {
-        this.p = new Uint8Array(256);
-        for (let i = 0; i < 256; i++) this.p[i] = i;
+    <!-- UI Overlay -->
+    <div class="absolute top-0 left-0 w-full h-full pointer-events-none z-10 flex flex-col justify-between p-6">
         
-        // Seeded shuffle (Fisher-Yates)
-        // LCG: https://en.wikipedia.org/wiki/Linear_congruential_generator
-        let s = seed;
-        const next = () => {
-            s = (s * 1664525 + 1013904223) % 4294967296;
-            return s / 4294967296;
-        };
-
-        for (let i = 255; i > 0; i--) {
-            const j = Math.floor(next() * (i + 1));
-            [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
-        }
-
-        this.perm = new Uint8Array(512);
-        this.permMod12 = new Uint8Array(512);
-        for (let i = 0; i < 512; i++) {
-            this.perm[i] = this.p[i & 255];
-            this.permMod12[i] = this.perm[i] % 12;
-        }
-    }
-
-    dot(g, x, y) {
-        return g[0] * x + g[1] * y;
-    }
-
-    // 2D Simplex Noise
-    noise2D(xin, yin) {
-        const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
-        const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
-        const grad3 = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[1,0],[-1,0],[0,1],[0,-1],[0,1],[0,-1]];
-
-        let n0, n1, n2;
-        let s = (xin + yin) * F2;
-        let i = Math.floor(xin + s);
-        let j = Math.floor(yin + s);
-        let t = (i + j) * G2;
-        let X0 = i - t;
-        let Y0 = j - t;
-        let x0 = xin - X0;
-        let y0 = yin - Y0;
-
-        let i1, j1;
-        if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
-
-        let x1 = x0 - i1 + G2;
-        let y1 = y0 - j1 + G2;
-        let x2 = x0 - 1.0 + 2.0 * G2;
-        let y2 = y0 - 1.0 + 2.0 * G2;
-
-        let ii = i & 255;
-        let jj = j & 255;
-        let gi0 = this.permMod12[ii + this.perm[jj]];
-        let gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
-        let gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
-
-        let t0 = 0.5 - x0 * x0 - y0 * y0;
-        if (t0 < 0) n0 = 0.0;
-        else {
-            t0 *= t0;
-            n0 = t0 * t0 * this.dot(grad3[gi0], x0, y0);
-        }
-
-        let t1 = 0.5 - x1 * x1 - y1 * y1;
-        if (t1 < 0) n1 = 0.0;
-        else {
-            t1 *= t1;
-            n1 = t1 * t1 * this.dot(grad3[gi1], x1, y1);
-        }
-
-        let t2 = 0.5 - x2 * x2 - y2 * y2;
-        if (t2 < 0) n2 = 0.0;
-        else {
-            t2 *= t2;
-            n2 = t2 * t2 * this.dot(grad3[gi2], x2, y2);
-        }
-
-        return 70.0 * (n0 + n1 + n2);
-    }
-}
-
-/**
- * Particle System
- */
-class FlowField {
-    constructor(canvasId, seed) {
-        this.canvas = document.getElementById(canvasId);
-        this.ctx = this.canvas.getContext('2d', { alpha: false }); // Optimize for non-transparent bg
-        
-        // Explicitly set canvas size to ensure correctness
-        this.width = 500;
-        this.height = 670;
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
-
-        this.particleCount = 2000;
-        this.speed = 2.0;
-        this.noiseScale = 0.0035;
-        this.timeScale = 0.0002;
-        
-        this.seed = seed;
-        this.noise = new SimplexNoise(this.seed);
-        this.time = 0;
-        
-        this.particles = [];
-        this.initParticles();
-
-        // Animation Loop
-        this.animate = this.animate.bind(this);
-        this.frameId = requestAnimationFrame(this.animate);
-    }
-
-    initParticles() {
-        this.particles = [];
-        // Seeded random generator for particle positions
-        let s = this.seed * 12345;
-        const nextRand = () => {
-            s = (s * 16807) % 2147483647;
-            return (s - 1) / 2147483646;
-        };
-
-        for (let i = 0; i < this.particleCount; i++) {
-            this.particles.push({
-                x: nextRand() * this.width,
-                y: nextRand() * this.height,
-                history: [] // For trails if we wanted complex lines, but we'll use fade technique
-            });
-        }
-    }
-
-    // Curl Noise calculation
-    // We use a scalar potential Psi = noise(x, y, time)
-    // curl = (-dPsi/dy, dPsi/dx)
-    getCurl(x, y, t) {
-        const eps = 1.0; // Small offset for derivative approximation
-        
-        // Potential at neighbors
-        const n1 = this.noise.noise2D(x * this.noiseScale, (y + eps) * this.noiseScale + t);
-        const n2 = this.noise.noise2D(x * this.noiseScale, (y - eps) * this.noiseScale + t);
-        const n3 = this.noise.noise2D((x + eps) * this.noiseScale, y * this.noiseScale + t);
-        const n4 = this.noise.noise2D((x - eps) * this.noiseScale, y * this.noiseScale + t);
-
-        // Partial derivatives
-        const dy = (n1 - n2) / (2 * eps);
-        const dx = (n3 - n4) / (2 * eps);
-
-        // Curl vector (rotated gradient)
-        // vx = -dPsi/dy
-        // vy = dPsi/dx
-        return { x: -dy, y: dx };
-    }
-
-    update() {
-        this.time += this.timeScale;
-
-        // Clear with slight fade for trails
-        // Using 'source-over' with low opacity black rectangle creates trails
-        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-
-        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-
-        for (let i = 0; i < this.particleCount; i++) {
-            let p = this.particles[i];
-
-            // Get vector field direction (Curl Noise)
-            let vector = this.getCurl(p.x, p.y, this.time);
-
-            // Normalize to constant speed
-            let mag = Math.sqrt(vector.x * vector.x + vector.y * vector.y);
+        <!-- Header -->
+        <div class="pointer-events-auto flex justify-between items-start">
+            <div>
+                <h1 class="text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 drop-shadow-lg">
+                    Aether Flow
+                </h1>
+                <p class="text-xs text-slate-400 mt-1 tracking-wider uppercase">Interactive Curl Noise Simulation</p>
+            </div>
             
-            // Avoid division by zero if noise produces a perfect 0 (unlikely but safe)
-            if (mag === 0) mag = 1; 
+            <!-- Stats / Info -->
+            <div class="text-right hidden md:block">
+                <div class="text-xs font-mono text-cyan-400" id="fpsCounter">60 FPS</div>
+                <div class="text-xs font-mono text-slate-500" id="particleCount">2000 Particles</div>
+            </div>
+        </div>
 
-            vector.x = (vector.x / mag) * this.speed;
-            vector.y = (vector.y / mag) * this.speed;
+        <!-- Controls Panel -->
+        <div class="pointer-events-auto glass-panel rounded-xl p-5 w-full max-w-xs md:max-w-sm self-end md:self-start mt-auto md:mt-0 md:absolute md:top-24 md:right-6 transition-all duration-300 hover:bg-slate-900/80">
+            <div class="space-y-5">
+                
+                <!-- Control Group: Flow -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <span>Flow Speed</span>
+                        <span id="val-speed">1.0</span>
+                    </div>
+                    <input type="range" id="speed" min="0.1" max="5.0" step="0.1" value="1.0">
+                </div>
 
-            // Update position
-            p.x += vector.x;
-            p.y += vector.y;
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <span>Turbulence</span>
+                        <span id="val-noise">0.003</span>
+                    </div>
+                    <input type="range" id="noiseScale" min="0.0005" max="0.0100" step="0.0001" value="0.003">
+                </div>
 
-            // Wrap around edges (Toroidal topology)
-            if (p.x < 0) p.x = this.width;
-            if (p.x > this.width) p.x = 0;
-            if (p.y < 0) p.y = this.height;
-            if (p.y > this.height) p.y = 0;
+                <!-- Control Group: Visuals -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <span>Trail Fade</span>
+                        <span id="val-fade">0.05</span>
+                    </div>
+                    <input type="range" id="fadeRate" min="0.01" max="0.30" step="0.01" value="0.05">
+                </div>
 
-            // Draw
-            // Using fillRect is faster than arc for 2000 particles
-            // Optimization: Check if particle is within bounds just in case
-            if (p.x >= 0 && p.x <= this.width && p.y >= 0 && p.y <= this.height) {
-                this.ctx.fillRect(Math.round(p.x), Math.round(p.y), 1.5, 1.5);
+                <div class="space-y-2">
+                    <div class="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <span>Color Shift</span>
+                        <span id="val-hue">0</span>
+                    </div>
+                    <input type="range" id="hueShift" min="0" max="360" step="1" value="0">
+                </div>
+
+                <!-- Actions -->
+                <div class="pt-2 flex gap-3">
+                    <button id="resetBtn" class="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2 px-4 rounded transition-colors border border-slate-600">
+                        RESET FIELD
+                    </button>
+                    <button id="clearBtn" class="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold py-2 px-4 rounded transition-colors shadow-[0_0_15px_rgba(8,145,178,0.5)]">
+                        CLEAR
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * Simplex Noise Implementation
+         * Standard implementation for coherent noise generation
+         */
+        const SimplexNoise = (function() {
+            // Ported from standard Simplex Noise algorithms
+            var F2 = 0.5 * (Math.sqrt(3.0) - 1.0),
+                G2 = (3.0 - Math.sqrt(3.0)) / 6.0,
+                F3 = 1.0 / 3.0,
+                G3 = 1.0 / 6.0,
+                F4 = (Math.sqrt(5.0) - 1.0) / 4.0,
+                G4 = (5.0 - Math.sqrt(5.0)) / 20.0;
+
+            function SimplexNoise(random) {
+                if (!random) random = Math.random;
+                this.p = new Uint8Array(256);
+                this.perm = new Uint8Array(512);
+                this.permMod12 = new Uint8Array(512);
+                for (var i = 0; i < 256; i++) {
+                    this.p[i] = random() * 256;
+                }
+                for (i = 0; i < 512; i++) {
+                    this.perm[i] = this.p[i & 255];
+                    this.permMod12[i] = this.perm[i] % 12;
+                }
+            }
+
+            SimplexNoise.prototype.dot2 = function(g, x, y) {
+                return g[0] * x + g[1] * y;
+            };
+
+            var grad2 = [[1, 1], [-1, 1], [1, -1], [-1, -1],
+                         [1, 0], [-1, 0], [1, 0], [-1, 0],
+                         [0, 1], [0, -1], [0, 1], [0, -1]];
+
+            SimplexNoise.prototype.noise2D = function(xin, yin) {
+                var permMod12 = this.permMod12,
+                    perm = this.perm,
+                    grad2 = this.constructor.grad2 || grad2;
+                
+                var n0, n1, n2;
+                var s = (xin + yin) * F2;
+                var i = Math.floor(xin + s);
+                var j = Math.floor(yin + s);
+                var t = (i + j) * G2;
+                var X0 = i - t;
+                var Y0 = j - t;
+                var x0 = xin - X0;
+                var y0 = yin - Y0;
+                
+                var i1, j1;
+                if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+                
+                var x1 = x0 - i1 + G2;
+                var y1 = y0 - j1 + G2;
+                var x2 = x0 - 1.0 + 2.0 * G2;
+                var y2 = y0 - 1.0 + 2.0 * G2;
+                
+                var ii = i & 255;
+                var jj = j & 255;
+                
+                var gi0 = permMod12[ii + perm[jj]];
+                var gi1 = permMod12[ii + i1 + perm[jj + j1]];
+                var gi2 = permMod12[ii + 1 + perm[jj + 1]];
+                
+                var t0 = 0.5 - x0 * x0 - y0 * y0;
+                if (t0 < 0) n0 = 0.0;
+                else {
+                    t0 *= t0;
+                    n0 = t0 * t0 * (grad2[gi0][0] * x0 + grad2[gi0][1] * y0);
+                }
+                
+                var t1 = 0.5 - x1 * x1 - y1 * y1;
+                if (t1 < 0) n1 = 0.0;
+                else {
+                    t1 *= t1;
+                    n1 = t1 * t1 * (grad2[gi1][0] * x1 + grad2[gi1][1] * y1);
+                }
+                
+                var t2 = 0.5 - x2 * x2 - y2 * y2;
+                if (t2 < 0) n2 = 0.0;
+                else {
+                    t2 *= t2;
+                    n2 = t2 * t2 * (grad2[gi2][0] * x2 + grad2[gi2][1] * y2);
+                }
+                
+                return 70.0 * (n0 + n1 + n2);
+            };
+
+            return SimplexNoise;
+        })();
+
+        /**
+         * Application Logic
+         */
+        const canvas = document.getElementById('flowCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // State
+        let width, height;
+        let particles = [];
+        const particleCount = 2000;
+        let time = 0;
+        let noise = new SimplexNoise();
+        
+        // Configuration
+        const config = {
+            speed: 1.0,
+            noiseScale: 0.003,
+            fadeRate: 0.05,
+            hueShift: 0,
+            baseSpeed: 2
+        };
+
+        // UI Elements
+        const ui = {
+            speed: document.getElementById('speed'),
+            noiseScale: document.getElementById('noiseScale'),
+            fadeRate: document.getElementById('fadeRate'),
+            hueShift: document.getElementById('hueShift'),
+            reset: document.getElementById('resetBtn'),
+            clear: document.getElementById('clearBtn'),
+            fps: document.getElementById('fpsCounter'),
+            labels: {
+                speed: document.getElementById('val-speed'),
+                noise: document.getElementById('val-noise'),
+                fade: document.getElementById('val-fade'),
+                hue: document.getElementById('val-hue')
+            }
+        };
+
+        // Resize Handler
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            initParticles();
+        }
+        window.addEventListener('resize', resize);
+
+        // Particle Class
+        class Particle {
+            constructor() {
+                this.reset();
+                // Start at random positions initially
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+            }
+
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = 0;
+                this.vy = 0;
+                this.life = Math.random() * 100 + 50; // Random lifespan
+                this.age = 0;
+                this.hue = Math.random() * 60 + 180 + config.hueShift; // Cyan/Blue range
+            }
+
+            update() {
+                // Curl Noise Calculation
+                // We sample the noise field at two slightly offset points to approximate the curl
+                const scale = config.noiseScale;
+                const z = time * 0.0005; // Time evolution
+                
+                // Noise values
+                const n1 = noise.noise2D(this.x * scale, this.y * scale + z);
+                // Offset sampling for curl approximation (using a small epsilon)
+                const eps = 0.01;
+                const n2 = noise.noise2D((this.x + eps) * scale, this.y * scale + z);
+                const n3 = noise.noise2D(this.x * scale, (this.y + eps) * scale + z);
+
+                // Approximate gradient (dN/dx, dN/dy)
+                const dx = (n2 - n1) / eps;
+                const dy = (n3 - n1) / eps;
+
+                // Curl of 2D scalar field is (dy, -dx)
+                // This ensures divergence-free flow (no sinks/sources)
+                this.vx = dy;
+                this.vy = -dx;
+
+                // Normalize velocity to keep speed constant regardless of noise intensity
+                const mag = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (mag > 0) {
+                    this.vx = (this.vx / mag) * config.baseSpeed * config.speed;
+                    this.vy = (this.vy / mag) * config.baseSpeed * config.speed;
+                }
+
+                // Update position
+                this.x += this.vx;
+                this.y += this.vy;
+                this.age++;
+
+                // Wrap around screen
+                if (this.x < 0) this.x = width;
+                if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height;
+                if (this.y > height) this.y = 0;
+
+                // Random reset based on life
+                if (this.age > this.life) {
+                    // Instead of dying instantly, maybe respawn randomly or fade?
+                    // Let's respawn at a random spot to keep density consistent
+                    if(Math.random() < 0.05) {
+                        this.reset();
+                        this.age = 0;
+                    }
+                }
+            }
+
+            draw() {
+                const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+                const alpha = Math.min(1, speed / 2); // Fade out if stopped (shouldn't happen often with curl)
+                
+                ctx.fillStyle = `hsla(${this.hue + config.hueShift}, 80%, 60%, ${alpha * 0.5})`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 1.2, 0, Math.PI * 2);
+                ctx.fill();
             }
         }
-    }
 
-    animate() {
-        this.update();
-        this.frameId = requestAnimationFrame(this.animate);
-    }
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle());
+            }
+        }
 
-    stop() {
-        cancelAnimationFrame(this.frameId);
-    }
-    
-    reset(newSeed) {
-        this.seed = newSeed;
-        this.noise = new SimplexNoise(this.seed);
-        this.time = 0;
-        this.initParticles();
-        // Clear screen immediately
-        this.ctx.fillStyle = '#000';
-        this.ctx.fillRect(0, 0, this.width, this.height);
-    }
-}
+        // Animation Loop
+        let lastTime = 0;
+        function animate(timestamp) {
+            // FPS Calculation
+            const delta = timestamp - lastTime;
+            lastTime = timestamp;
+            if (timestamp % 20 < 1) { // Update FPS roughly every 20 frames
+                ui.fps.innerText = Math.round(1000/delta) + " FPS";
+            }
 
-// --- Initialization & Control ---
+            time += delta;
 
-let seed = 123;
-let flowField = new FlowField('flowCanvas', seed);
+            // Trail Effect
+            // Instead of clearing, we draw a semi-transparent rectangle
+            // This creates the "trail" or "motion blur" effect
+            ctx.fillStyle = `rgba(15, 23, 42, ${config.fadeRate})`;
+            ctx.fillRect(0, 0, width, height);
 
-// Restart every 10 seconds
-setInterval(() => {
-    seed++;
-    flowField.reset(seed);
-}, 10000);
+            // Update and Draw Particles
+            // Use lighter composite operation for glowing effect
+            ctx.globalCompositeOperation = 'lighter';
+            
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
 
-</script>
+            ctx.globalCompositeOperation = 'source-over';
+
+            requestAnimationFrame(animate);
+        }
+
+        // Event Listeners for UI
+        ui.speed.addEventListener('input', (e) => {
+            config.speed = parseFloat(e.target.value);
+            ui.labels.speed.innerText = config.speed.toFixed(1);
+        });
+
+        ui.noiseScale.addEventListener('input', (e) => {
+            config.noiseScale = parseFloat(e.target.value);
+            ui.labels.noise.innerText = config.noiseScale.toFixed(4);
+        });
+
+        ui.fadeRate.addEventListener('input', (e) => {
+            config.fadeRate = parseFloat(e.target.value);
+            ui.labels.fade.innerText = config.fadeRate.toFixed(2);
+        });
+
+        ui.hueShift.addEventListener('input', (e) => {
+            config.hueShift = parseInt(e.target.value);
+            ui.labels.hue.innerText = config.hueShift;
+            // Update existing particles slightly for immediate feedback
+            particles.forEach(p => p.hue = (p.hue % 360) + 1); 
+        });
+
+        ui.reset.addEventListener('click', () => {
+            noise = new SimplexNoise(); // New seed
+            initParticles();
+            // Flash effect
+            ctx.fillStyle = 'rgba(15, 23, 42, 1)';
+            ctx.fillRect(0, 0, width, height);
+        });
+
+        ui.clear.addEventListener('click', () => {
+            ctx.fillStyle = 'rgba(15, 23, 42, 1)';
+            ctx.fillRect(0, 0, width, height);
+        });
+
+        // Mouse Interaction (Optional subtle influence)
+        // Push particles away from mouse slightly
+        let mouse = { x: -1000, y: -1000 };
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = e.clientX;
+            mouse.y = e.clientY;
+        });
+
+        // Initialize
+        resize();
+        requestAnimationFrame(animate);
+
+    </script>
 </body>
 </html>

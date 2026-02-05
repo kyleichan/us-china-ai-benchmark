@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;overflow:hidden;background:#222;display:flex;justify-content:center;align-items:center;height:100vh">
+<canvas id="c" width="200" height="300" style="background:#efefef;border:2px solid #555"></canvas>
+<script>
+const C=document.getElementById('c'), X=C.getContext('2d');
+let bs=[], drag=null, offX=0, offY=0, q=0;
+
+// Init Blocks
+for(let i=0;i<10;i++) bs.push({
+    x:20+Math.random()*120, y:Math.random()*150, 
+    w:20+Math.random()*30, h:20+Math.random()*30, 
+    vx:0, vy:0, c:`hsl(${Math.random()*360},70%,60%)`
+});
+
+// Input
+const getPos = e => {
+    const r=C.getBoundingClientRect();
+    return {x: (e.clientX||e.touches[0].clientX)-r.left, y: (e.clientY||e.touches[0].clientY)-r.top};
+};
+
+const down = e => {
+    const p=getPos(e);
+    for(let i=bs.length-1;i>=0;i--){
+        let b=bs[i];
+        if(p.x>b.x && p.x<b.x+b.w && p.y>b.y && p.y<b.y+b.h){
+            drag=b; offX=p.x-b.x; offY=p.y-b.y; b.vx=b.vy=0;
+            return;
+        }
+    }
+};
+const move = e => { if(drag){ const p=getPos(e); drag.x=p.x-offX; drag.y=p.y-offY; drag.vx=drag.vy=0; }};
+const up = () => drag=null;
+
+C.onmousedown=down; C.onmousemove=move; window.onmouseup=up;
+C.ontouchstart=down; C.ontouchmove=move; window.ontouchend=up;
+
+// Earthquake
+setInterval(()=>{ q=5; setTimeout(()=>q=0, 1000); }, 4000);
+
+function loop() {
+    // Shake Canvas
+    X.save();
+    if(q) X.translate((Math.random()-0.5)*q, (Math.random()-0.5)*q);
+    X.clearRect(0,0,200,300);
+    
+    // Ground
+    X.fillStyle='#654'; X.fillRect(0,280,200,20);
+
+    bs.forEach(b => {
+        if(b!==drag){
+            b.vy += 0.5; // Gravity
+            b.x += b.vx; b.y += b.vy;
+            b.vx *= 0.9; b.vy *= 0.9; // Friction
+
+            // Earthquake force
+            if(q) { b.vx+=(Math.random()-0.5); b.vy-=Math.random()*0.5; }
+
+            // Wall/Floor
+            if(b.x<0) {b.x=0; b.vx*=-0.5;}
+            if(b.x+b.w>200) {b.x=200-b.w; b.vx*=-0.5;}
+            if(b.y+b.h>280) {b.y=280-b.h; b.vy=0; b.vx*=0.8;} 
+        }
+    });
+
+    // Collision (Simple Impulse)
+    for(let k=0;k<5;k++) { // Iterations for stability
+        for(let i=0;i<bs.length;i++){
+            for(let j=i+1;j<bs.length;j++){
+                let b1=bs[i], b2=bs[j];
+                if(b1===drag || b2===drag) continue;
+                
+                // AABB Check
+                if (b1.x < b2.x + b2.w && b1.x + b1.w > b2.x &&
+                    b1.y < b2.y + b2.h && b1.y + b1.h > b2.y) {
+                    
+                    let dx = (b1.x + b1.w/2) - (b2.x + b2.w/2);
+                    let dy = (b1.y + b1.h/2) - (b2.y + b2.h/2);
+                    let w = (b1.w + b2.w)/2, h = (b1.h + b2.h)/2;
+                    let crossWidth = w * dy, crossHeight = h * dx;
+
+                    if (Math.abs(dx) <= w && Math.abs(dy) <= h) {
+                        if (crossWidth > crossHeight) {
+                            if (crossWidth > -crossHeight) { // Bottom
+                                b1.y = b2.y + b2.h; b1.vy = 0; 
+                            } else { // Left
+                                b1.x = b2.x - b1.w; b1.vx *= -0.5; b2.vx += 1;
+                            }
+                        } else {
+                            if (crossWidth > -crossHeight) { // Right
+                                b1.x = b2.x + b2.w; b1.vx *= -0.5; b2.vx -= 1;
+                            } else { // Top
+                                b1.y = b2.y - b1.h; b1.vy = 0; 
+                                // Sliding logic if center is off
+                                let diff = (b1.x+b1.w/2)-(b2.x+b2.w/2);
+                                if(Math.abs(diff) > b2.w/3) b1.vx += diff*0.02;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Draw
+    bs.forEach(b => {
+        X.fillStyle=b.c; X.strokeStyle='#000';
+        X.fillRect(b.x, b.y, b.w, b.h);
+        X.strokeRect(b.x, b.y, b.w, b.h);
+    });
+
+    X.restore();
+    if(q) {X.fillStyle='red'; X.font='20px Arial'; X.fillText("EARTHQUAKE!", 30, 50);}
+    requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>

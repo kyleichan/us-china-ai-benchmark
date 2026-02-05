@@ -1,638 +1,370 @@
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8" />
+<meta charset="utf-8">
 <style>
-html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
-canvas{display:block}
+html,body{margin:0;padding:0;background:#0b0c10;overflow:hidden}
+canvas{display:block;width:250px;height:400px;image-rendering:pixelated}
 </style>
 </head>
 <body>
-<canvas id="c" width="500" height="670"></canvas>
+<canvas id="c" width="250" height="400"></canvas>
 <script>
 (() => {
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d', { alpha: false });
 
-  const W = 500, H = 670;
+  const W = canvas.width, H = canvas.height;
 
-  // City layout
-  const marginX = 35;
-  const marginY = 85;
-  const gridSize = 10; // 10x10 intersections
-  const spanX = W - 2 * marginX;
-  const spanY = H - 2 * marginY;
-  const cellX = spanX / (gridSize - 1);
-  const cellY = spanY / (gridSize - 1);
+  const cols = 10, rows = 10;
+  const marginX = 10, marginY = 10;
+  const roadW = 10;
+  const cellW = (W - 2*marginX - (cols-1)*roadW)/cols;
+  const cellH = (H - 2*marginY - (rows-1)*roadW)/rows;
+  const blockW = cellW, blockH = cellH;
 
-  const lanes = 1; // per direction
-  const laneW = 5.8;
-  const roadHalf = laneW * lanes * 2 * 0.5 + 6; // for drawing width
-  const stopLine = 9; // distance before intersection center (along lane)
-  const lookAhead = 70;
-  const minGap = 7;
-  const carLen = 8;
-  const carWid = 4;
+  const gridW = cols*blockW + (cols-1)*roadW;
+  const gridH = rows*blockH + (rows-1)*roadW;
+  const ox = (W - gridW)/2;
+  const oy = (H - gridH)/2;
 
-  // Simulation
-  const dtFixed = 1 / 60;
-  const cycleSeconds = 6.0; // light cycle
-  const yellowSeconds = 0.7;
-  const simResetSeconds = 10.0;
+  const xLines = new Array(cols).fill(0).map((_,i)=> ox + i*(blockW+roadW) + blockW + (i===cols-1?0:roadW/2));
+  const yLines = new Array(rows).fill(0).map((_,j)=> oy + j*(blockH+roadW) + blockH + (j===rows-1?0:roadW/2));
 
-  // Traffic volume
-  const targetCars = 130; // moderate-high to form congestion
-  const spawnTriesPerFrame = 3;
+  const laneOffset = roadW*0.18;
+  const laneHalf = roadW*0.22;
 
-  // Colors
-  const col = {
-    asphalt: "#0a0a0a",
-    road: "#101010",
-    lane: "rgba(255,255,255,0.08)",
-    lane2: "rgba(255,255,255,0.04)",
-    curb: "rgba(255,255,255,0.02)",
-    block: "#070707",
-    lightPole: "rgba(255,255,255,0.08)",
-    red: "#ff3b30",
-    green: "#34c759",
-    yellow: "#ffd60a",
-    car: ["#8ecae6","#ffb703","#fb8500","#219ebc","#e63946","#a8dadc","#f4a261","#2a9d8f","#cdb4db","#90be6d"]
-  };
+  function wrapDir(d){ d%=4; if(d<0)d+=4; return d; }
+  const DIRS = [
+    {dx: 1, dy: 0}, // E
+    {dx: 0, dy: 1}, // S
+    {dx:-1, dy: 0}, // W
+    {dx: 0, dy:-1}  // N
+  ];
 
-  // RNG (seeded)
-  function xorshift32(seed){
-    let x = seed >>> 0;
-    return () => {
-      x ^= x << 13; x >>>= 0;
-      x ^= x >>> 17; x >>>= 0;
-      x ^= x << 5; x >>>= 0;
-      return (x >>> 0) / 4294967296;
-    };
+  function intersectionCenter(i,j){
+    return {x:xLines[i], y:yLines[j]};
   }
 
-  let rng = xorshift32(1);
+  function laneXY(i,j,dir){
+    const c = intersectionCenter(i,j);
+    if(dir===0) return {x:c.x, y:c.y - laneOffset};       // E, upper half of horizontal
+    if(dir===2) return {x:c.x, y:c.y + laneOffset};       // W, lower half
+    if(dir===1) return {x:c.x + laneOffset, y:c.y};       // S, right half of vertical
+    return {x:c.x - laneOffset, y:c.y};                    // N, left half
+  }
 
-  // Helpers: grid to world
-  function ixToX(i){ return marginX + i * cellX; }
-  function iyToY(j){ return marginY + j * cellY; }
-
-  // Each directed lane is a "segment" between adjacent intersections.
-  // Direction encoding: 0=E,1=W,2=S,3=N
-  const DIR = {
-    E:0, W:1, S:2, N:3,
-    dx:[1,-1,0,0],
-    dy:[0,0,1,-1]
-  };
-  function oppositeDir(d){ return d===0?1:d===1?0:d===2?3:2; }
-  function turnLeft(d){ return d===0?3:d===1?2:d===2?0:1; }
-  function turnRight(d){ return d===0?2:d===1?3:d===2?1:0; }
-
-  // Lane center offsets (per road)
-  // Horizontal roads: y offset depends on direction.
-  // Vertical roads: x offset depends on direction.
-  const laneOffset = (dir) => {
-    const o = laneW * 0.6;
-    // For a 2-way road: E uses "south" lane, W uses "north" lane.
-    // S uses "east" lane, N uses "west" lane.
-    if (dir === DIR.E) return { ox:0, oy:+o };
-    if (dir === DIR.W) return { ox:0, oy:-o };
-    if (dir === DIR.S) return { ox:+o, oy:0 };
-    return { ox:-o, oy:0 }; // N
-  };
-
-  function segKey(ax, ay, dir){ return ((ax*gridSize + ay) * 4 + dir) | 0; }
-
-  const segments = new Map(); // key -> segment object
-  function getSegment(ax, ay, dir){
-    const k = segKey(ax, ay, dir);
-    let s = segments.get(k);
-    if (!s){
-      const bx = ax + DIR.dx[dir];
-      const by = ay + DIR.dy[dir];
-      if (bx < 0 || bx >= gridSize || by < 0 || by >= gridSize) return null;
-      const A = { x: ixToX(ax), y: iyToY(ay) };
-      const B = { x: ixToX(bx), y: iyToY(by) };
-      const len = Math.hypot(B.x - A.x, B.y - A.y);
-      const off = laneOffset(dir);
-      s = {
-        ax, ay, bx, by, dir,
-        A, B,
-        len,
-        off,
-        cars: [] // store indices of cars currently on this segment
-      };
-      segments.set(k, s);
+  const lights = [];
+  for(let j=0;j<rows;j++){
+    for(let i=0;i<cols;i++){
+      const phase0 = ((i*17 + j*31) % 120);
+      lights.push({
+        i,j,
+        t: phase0,
+        cycle: 120,
+        greenA: 60,
+        amber: 6
+      });
     }
-    return s;
   }
-
-  // Pre-create all segments for adjacency and drawing
-  const allSegments = [];
-  for (let x=0;x<gridSize;x++){
-    for (let y=0;y<gridSize;y++){
-      for (let d=0;d<4;d++){
-        const s = getSegment(x,y,d);
-        if (s) allSegments.push(s);
-      }
+  function lightAt(i,j){ return lights[j*cols+i]; }
+  function isGreen(i,j,dir){
+    const L = lightAt(i,j);
+    const t = L.t % L.cycle;
+    const horiz = (dir===0 || dir===2);
+    const g0 = t < L.greenA;
+    const inAmber = (!g0) && (t < L.greenA + L.amber);
+    if(horiz){
+      if(g0) return 1;
+      if(inAmber) return 0.3;
+      return 0;
+    }else{
+      if(!g0 && !inAmber) return 1;
+      if(inAmber) return 0.3;
+      return 0;
     }
   }
 
-  // Traffic lights at intersections: two phases: EW green then NS green
-  const lights = new Array(gridSize * gridSize);
-  for (let x=0;x<gridSize;x++){
-    for (let y=0;y<gridSize;y++){
-      const phase = (rng()*cycleSeconds) % cycleSeconds;
-      lights[x*gridSize+y] = { phase };
+  const vehicles = [];
+  const maxVehicles = 160;
+
+  function randInt(n){ return (Math.random()*n)|0; }
+  function randChoice(a){ return a[(Math.random()*a.length)|0]; }
+
+  function pickRandomEdge(){
+    const side = randInt(4);
+    if(side===0) return {i:0, j:randInt(rows), dir:0};
+    if(side===1) return {i:cols-1, j:randInt(rows), dir:2};
+    if(side===2) return {i:randInt(cols), j:0, dir:1};
+    return {i:randInt(cols), j:rows-1, dir:3};
+  }
+
+  function pickRandomDestDifferent(from){
+    let d;
+    do{
+      d = {i:randInt(cols), j:randInt(rows)};
+    }while(d.i===from.i && d.j===from.j);
+    return d;
+  }
+
+  function nextTurnDir(currDir, i, j, dest){
+    const dx = dest.i - i;
+    const dy = dest.j - j;
+    const opts = [];
+    for(let turn=-1; turn<=1; turn++){
+      const nd = wrapDir(currDir + turn);
+      const ni = i + DIRS[nd].dx;
+      const nj = j + DIRS[nd].dy;
+      if(ni<0||ni>=cols||nj<0||nj>=rows) continue;
+      opts.push(nd);
     }
-  }
-  function lightStateAt(x,y, t){
-    const L = lights[x*gridSize+y];
-    // phase in [0,cycle)
-    let ph = (L.phase + t) % cycleSeconds;
-    // ph < cycle/2 => EW green; else NS green
-    const half = cycleSeconds * 0.5;
-    const ewGreen = ph < half;
-    const inYellow = (ph % half) > (half - yellowSeconds);
-    // return per dir permission at intersection (for approaching cars)
-    return { ewGreen, nsGreen: !ewGreen, inYellow };
-  }
-
-  // Car model (IDM-like)
-  class Car {
-    constructor(seg, s0, v0, colorIdx, dest){
-      this.seg = seg;
-      this.s = s0;        // distance from seg start along centerline (0..len)
-      this.v = v0;        // speed (px/s)
-      this.a = 0;
-      this.color = col.car[colorIdx % col.car.length];
-      this.length = carLen;
-      this.width = carWid;
-
-      // Desired behavior parameters (varied for heterogeneity)
-      const r = rng();
-      this.v0 = 44 + 24*r;     // desired speed
-      this.aMax = 120 + 60*r;  // max accel
-      this.bComfort = 160 + 90*(1-r); // comfortable braking
-      this.T = 0.9 + 0.7*r;    // desired headway time
-      this.s0 = 5 + 3*r;       // minimum gap
-      this.delta = 4;
-
-      this.turnBias = rng()*0.5; // influences random turns
-
-      // Route intent: destination intersection; but decisions only at intersections
-      this.dest = dest;
-      this.alive = true;
-      this.wait = 0;
-      this.colorIdx = colorIdx;
-    }
-  }
-
-  let cars = [];
-  let tSim = 0;
-  let accum = 0;
-  let lastTs = performance.now();
-
-  function reset(seed){
-    rng = xorshift32(seed >>> 0);
-    // Reset lights with new offsets
-    for (let x=0;x<gridSize;x++){
-      for (let y=0;y<gridSize;y++){
-        lights[x*gridSize+y].phase = (rng()*cycleSeconds) % cycleSeconds;
-      }
-    }
-    // Clear segment car lists
-    for (const s of allSegments) s.cars.length = 0;
-    cars = [];
-    tSim = 0;
-    accum = 0;
-
-    // Pre-seed with cars
-    for (let k=0;k<targetCars;k++){
-      trySpawn(true);
-    }
-  }
-
-  function pickBoundarySpawn(){
-    // Pick a boundary segment entering into grid
-    // Boundary cells: if at x=0 then dir=E; x=9 dir=W; y=0 dir=S; y=9 dir=N
-    const side = (rng()*4)|0;
-    if (side === 0){ // left -> right
-      const y = (rng()*gridSize)|0;
-      return getSegment(0, y, DIR.E);
-    } else if (side === 1){ // right -> left
-      const y = (rng()*gridSize)|0;
-      return getSegment(gridSize-1, y, DIR.W);
-    } else if (side === 2){ // top -> down
-      const x = (rng()*gridSize)|0;
-      return getSegment(x, 0, DIR.S);
-    } else { // bottom -> up
-      const x = (rng()*gridSize)|0;
-      return getSegment(x, gridSize-1, DIR.N);
-    }
-  }
-
-  function pickDestination(){
-    return { x: (rng()*gridSize)|0, y: (rng()*gridSize)|0 };
-  }
-
-  function canPlaceOnSegment(seg, sPos){
-    // Ensure no car too close near start
-    let minD = Infinity;
-    for (const idx of seg.cars){
-      const c = cars[idx];
-      if (!c || !c.alive) continue;
-      const d = c.s - sPos;
-      if (d >= 0) minD = Math.min(minD, d);
-    }
-    return minD > (carLen + 6);
-  }
-
-  function trySpawn(force=false){
-    if (!force && cars.length >= targetCars) return;
-    const seg = pickBoundarySpawn();
-    if (!seg) return;
-    const s0 = 3 + rng()*6;
-    if (!canPlaceOnSegment(seg, s0)) return;
-    const colorIdx = (rng()*1000)|0;
-    const dest = pickDestination();
-    const c = new Car(seg, s0, 10 + 10*rng(), colorIdx, dest);
-    const idx = cars.length;
-    cars.push(c);
-    seg.cars.push(idx);
-  }
-
-  function segmentWorldPos(seg, s){
-    const t = Math.max(0, Math.min(1, s / seg.len));
-    const x = seg.A.x + (seg.B.x - seg.A.x)*t + seg.off.ox;
-    const y = seg.A.y + (seg.B.y - seg.A.y)*t + seg.off.oy;
-    return { x, y };
-  }
-
-  function segmentAngle(seg){
-    return Math.atan2(seg.B.y - seg.A.y, seg.B.x - seg.A.x);
-  }
-
-  function distanceToRedLight(car, t){
-    // Car approaches intersection at seg end (B). Stop line before center.
-    const ix = car.seg.bx, iy = car.seg.by;
-    const st = lightStateAt(ix, iy, t);
-    const dir = car.seg.dir;
-    const isEW = (dir === DIR.E || dir === DIR.W);
-    const green = isEW ? st.ewGreen : st.nsGreen;
-
-    // During yellow, allow passing if too close to stop comfortably
-    const distToEnd = car.seg.len - car.s;
-    const distToStop = Math.max(0, distToEnd - stopLine);
-
-    if (green) return Infinity;
-
-    if (st.inYellow){
-      // If cannot stop comfortably, treat as green (go through)
-      const v = Math.max(0.1, car.v);
-      const dStop = (v*v) / (2*Math.max(40, car.bComfort));
-      if (distToStop < dStop + 3) return Infinity;
-    }
-    return distToStop;
-  }
-
-  function chooseNextSegment(car){
-    const x = car.seg.bx, y = car.seg.by;
-    // If reached destination neighborhood, increase chance to exit quickly by heading outward
-    const dx = car.dest.x - x, dy = car.dest.y - y;
-
-    // Candidate dirs: straight, left, right (no U-turn)
-    const straight = car.seg.dir;
-    const left = turnLeft(straight);
-    const right = turnRight(straight);
-
-    const candidates = [straight, left, right].map(d => getSegment(x, y, d)).filter(Boolean);
-
-    if (candidates.length === 0) return null;
-
-    // Local rule with slight destination bias (still local, no global path)
-    function score(seg){
-      const nx = seg.bx, ny = seg.by;
-      const ddx = car.dest.x - nx, ddy = car.dest.y - ny;
-      const toward = -(Math.abs(ddx) + Math.abs(ddy)); // higher is better
-      const crowd = seg.cars.length;
-      const r = rng()*0.8 - 0.4;
-      return 0.65*toward - 0.9*crowd + 0.15*r;
-    }
-
-    let best = candidates[0], bestScore = -1e9;
-    for (const s of candidates){
-      const sc = score(s);
-      if (sc > bestScore){ bestScore = sc; best = s; }
-    }
-
-    // Small random deviation to avoid determinism
-    if (rng() < 0.10 + car.turnBias*0.04){
-      best = candidates[(rng()*candidates.length)|0];
+    if(opts.length===0) return currDir;
+    let best = opts[0];
+    let bestScore = -1e9;
+    for(const nd of opts){
+      const ni = i + DIRS[nd].dx;
+      const nj = j + DIRS[nd].dy;
+      const dist = Math.abs(dest.i - ni) + Math.abs(dest.j - nj);
+      const prog = -(dist);
+      const align = (Math.abs(dx)>Math.abs(dy))
+        ? ((nd===0&&dx>0)||(nd===2&&dx<0) ? 0.4 : 0)
+        : ((nd===1&&dy>0)||(nd===3&&dy<0) ? 0.4 : 0);
+      const rand = (Math.random()-0.5)*0.15;
+      const score = prog + align + rand;
+      if(score>bestScore){ bestScore=score; best=nd; }
     }
     return best;
   }
 
-  function removeCarFromSegment(seg, idx){
-    const arr = seg.cars;
-    for (let i=0;i<arr.length;i++){
-      if (arr[i] === idx){
-        arr[i] = arr[arr.length-1];
-        arr.pop();
-        return;
+  function spawnVehicle(){
+    const s = pickRandomEdge();
+    const dest = pickRandomDestDifferent(s);
+    const vMax = 22 + Math.random()*10;
+    const aMax = 18 + Math.random()*10;
+    const bMax = 30 + Math.random()*20;
+    const len = 5.5 + Math.random()*2.5;
+    const gap = 4 + Math.random()*4;
+
+    vehicles.push({
+      i:s.i, j:s.j, dir:s.dir,
+      seg: 0,
+      dest,
+      v: 0,
+      vMax,
+      aMax,
+      bMax,
+      len,
+      minGap: gap,
+      color: `hsl(${(Math.random()*360)|0} 70% 55%)`,
+      seed: Math.random()*1000,
+      intentDir: s.dir,
+      reached:false
+    });
+  }
+
+  function segLength(i,j,dir){
+    const c = intersectionCenter(i,j);
+    const ni = i + DIRS[dir].dx;
+    const nj = j + DIRS[dir].dy;
+    if(ni<0||ni>=cols||nj<0||nj>=rows) return 0;
+    const n = intersectionCenter(ni,nj);
+    return Math.hypot(n.x - c.x, n.y - c.y);
+  }
+
+  function worldPos(i,j,dir,seg){
+    const c = laneXY(i,j,dir);
+    const ni = i + DIRS[dir].dx;
+    const nj = j + DIRS[dir].dy;
+    const n = laneXY(ni,nj,dir);
+    const dx = n.x - c.x;
+    const dy = n.y - c.y;
+    return {x: c.x + dx*seg, y: c.y + dy*seg, dx, dy};
+  }
+
+  function findLeader(v){
+    let best = null;
+    let bestDist = 1e9;
+    for(const u of vehicles){
+      if(u===v) continue;
+      if(u.i!==v.i||u.j!==v.j||u.dir!==v.dir) continue;
+      const d = u.seg - v.seg;
+      if(d>0 && d<bestDist){
+        bestDist = d;
+        best = u;
       }
+    }
+    return {leader:best, gap:bestDist};
+  }
+
+  function updateLights(dt){
+    for(const L of lights){
+      L.t = (L.t + dt*30) % L.cycle;
     }
   }
 
-  function findLeaderInSameSegment(seg, carS, myIdx){
-    let leaderIdx = -1;
-    let bestD = Infinity;
-    for (const idx of seg.cars){
-      if (idx === myIdx) continue;
-      const c = cars[idx];
-      if (!c || !c.alive) continue;
-      const d = c.s - carS;
-      if (d > 0 && d < bestD){
-        bestD = d;
-        leaderIdx = idx;
-      }
+  function stepVehicle(v, dt){
+    const L = segLength(v.i,v.j,v.dir);
+    if(L<=0){ v.reached=true; return; }
+
+    const traffic = findLeader(v);
+    let sLead = 1e9;
+    let vLead = 0;
+    if(traffic.leader){
+      sLead = traffic.gap*L - traffic.leader.len*0.9;
+      vLead = traffic.leader.v;
     }
-    return leaderIdx;
+
+    const center = intersectionCenter(v.i,v.j);
+    const ni = v.i + DIRS[v.dir].dx;
+    const nj = v.j + DIRS[v.dir].dy;
+    const atEdge = (ni<0||ni>=cols||nj<0||nj>=rows);
+
+    let stopDist = 1e9;
+    let signalFactor = 1;
+    if(!atEdge){
+      signalFactor = isGreen(ni,nj,v.dir);
+      if(signalFactor<=0){
+        stopDist = (1 - v.seg)*L - 2.0;
+      }else if(signalFactor<1){
+        if(v.v > 10){
+          stopDist = (1 - v.seg)*L - 1.0;
+        }
+      }
+    }else{
+      stopDist = (1 - v.seg)*L - 2.0;
+    }
+
+    const desiredGap = v.minGap + Math.max(0, v.v*0.55) + (v.v*(v.v - vLead)) / (2*Math.sqrt(v.aMax*v.bMax) + 1e-6);
+    const sNet = Math.min(sLead, stopDist);
+    const freeAcc = v.aMax*(1 - Math.pow(Math.min(1, v.v/(v.vMax+1e-6)), 4));
+    const interact = (sNet<1e8) ? v.aMax*(1 - Math.pow(desiredGap/Math.max(0.5,sNet), 2)) : v.aMax;
+    let a = Math.min(freeAcc, interact);
+    if(signalFactor<=0) a = Math.min(a, -v.bMax*0.9);
+    if(stopDist < 8 && v.v>0) a = Math.min(a, -v.bMax*0.7);
+    a = Math.max(-v.bMax, Math.min(v.aMax, a));
+
+    v.v += a*dt;
+    if(v.v<0) v.v=0;
+
+    const ds = (v.v*dt)/L;
+    v.seg += ds;
+
+    while(v.seg >= 1){
+      v.seg -= 1;
+      if(atEdge){ v.reached=true; break; }
+      v.i = ni; v.j = nj;
+
+      if(v.i===v.dest.i && v.j===v.dest.j){
+        if(Math.random()<0.4) { v.reached=true; break; }
+        v.dest = pickRandomDestDifferent({i:v.i,j:v.j});
+      }
+
+      const nd = nextTurnDir(v.dir, v.i, v.j, v.dest);
+      v.dir = nd;
+
+      const NL = segLength(v.i,v.j,v.dir);
+      if(NL<=0){ v.reached=true; break; }
+    }
   }
 
   function update(dt){
-    tSim += dt;
+    updateLights(dt);
 
-    // Spawn attempts
-    for (let k=0;k<spawnTriesPerFrame;k++){
-      if (cars.length < targetCars) trySpawn(false);
-      else if (rng() < 0.02) trySpawn(false); // small inflow even if at target (replaces exits)
-    }
+    const target = maxVehicles;
+    const spawnRate = 22;
+    const need = Math.max(0, target - vehicles.length);
+    const p = Math.min(1, dt*spawnRate) * (need/(target+1));
+    if(Math.random() < p) spawnVehicle();
+    if(Math.random() < p*0.7) spawnVehicle();
 
-    // Compute accelerations per car (IDM with red-light as virtual leader)
-    for (let i=0;i<cars.length;i++){
-      const car = cars[i];
-      if (!car || !car.alive) continue;
-
-      const seg = car.seg;
-      const leaderIdx = findLeaderInSameSegment(seg, car.s, i);
-      let sAlpha = Infinity; // net headway (gap)
-      let dv = 0;
-
-      if (leaderIdx >= 0){
-        const lead = cars[leaderIdx];
-        const gap = (lead.s - car.s) - (lead.length*0.5 + car.length*0.5) - 1.5;
-        sAlpha = Math.max(0.01, gap);
-        dv = car.v - lead.v;
-      }
-
-      // Red light / intersection constraint as virtual stationary leader at stop line
-      const dRed = distanceToRedLight(car, tSim);
-      if (dRed !== Infinity){
-        const virtualGap = dRed - car.length*0.5;
-        if (virtualGap < sAlpha){
-          sAlpha = Math.max(0.01, virtualGap);
-          dv = car.v; // leader speed 0
-        }
-      }
-
-      // Speed limit / desired speed varies a little by segment direction
-      const limBase = (seg.dir === DIR.E || seg.dir === DIR.W) ? 62 : 58;
-      const vDesired = Math.min(car.v0, limBase + 6*(rng()-0.5));
-
-      // IDM
-      const v = Math.max(0, car.v);
-      const aMax = car.aMax;
-      const b = car.bComfort;
-      const T = car.T;
-      const s0 = car.s0;
-
-      let aFree = aMax * (1 - Math.pow(v / Math.max(1, vDesired), car.delta));
-      if (!isFinite(aFree)) aFree = 0;
-
-      let aInt = 0;
-      if (sAlpha !== Infinity){
-        const sStar = s0 + Math.max(0, v*T + (v*dv) / (2*Math.sqrt(aMax*b)));
-        aInt = -aMax * Math.pow(sStar / Math.max(0.01, sAlpha), 2);
-      }
-
-      let a = aFree + aInt;
-
-      // Mild damping to reduce jitter
-      a -= 0.12 * car.v;
-
-      // Clamp accel
-      a = Math.max(-420, Math.min(260, a));
-      car.a = a;
-    }
-
-    // Integrate, handle segment transitions
-    for (let i=0;i<cars.length;i++){
-      const car = cars[i];
-      if (!car || !car.alive) continue;
-
-      car.v = Math.max(0, car.v + car.a * dt);
-      car.s += car.v * dt;
-
-      // Simple "stuck" bookkeeping
-      if (car.v < 1) car.wait += dt;
-      else car.wait = Math.max(0, car.wait - 0.5*dt);
-
-      // If reached end of segment, transition
-      while (car.s >= car.seg.len){
-        car.s -= car.seg.len;
-
-        const oldSeg = car.seg;
-        const x = oldSeg.bx, y = oldSeg.by;
-
-        // If at boundary and heading outward would leave grid, despawn
-        // (or randomly despawn to keep flow)
-        if (x === 0 || y === 0 || x === gridSize-1 || y === gridSize-1){
-          if (rng() < 0.30){
-            car.alive = false;
-            removeCarFromSegment(oldSeg, i);
-            break;
-          }
-        }
-
-        const next = chooseNextSegment(car);
-        if (!next){
-          car.alive = false;
-          removeCarFromSegment(oldSeg, i);
-          break;
-        }
-
-        // Move segment lists
-        removeCarFromSegment(oldSeg, i);
-        car.seg = next;
-        next.cars.push(i);
-
-        // If too close to a car at new segment start, nudge back and slow
-        const leaderIdx = findLeaderInSameSegment(next, car.s, i);
-        if (leaderIdx >= 0){
-          const lead = cars[leaderIdx];
-          const gap = (lead.s - car.s) - (lead.length*0.5 + car.length*0.5) - 1.5;
-          if (gap < 2){
-            car.s = Math.max(0.2, car.s - (2 - gap));
-            car.v = Math.min(car.v, lead.v);
-          }
-        }
-
-        // Occasionally "arrive" if close to destination
-        if (Math.abs(car.dest.x - x) + Math.abs(car.dest.y - y) <= 1 && rng() < 0.12){
-          car.dest = pickDestination();
-        }
-      }
-    }
+    for(const v of vehicles) stepVehicle(v, dt);
+    for(let k=vehicles.length-1;k>=0;k--) if(vehicles[k].reached) vehicles.splice(k,1);
   }
 
   function draw(){
-    // Background
-    ctx.fillStyle = col.asphalt;
+    ctx.fillStyle = '#0b0c10';
     ctx.fillRect(0,0,W,H);
 
-    // Blocks (dark squares)
-    ctx.fillStyle = col.block;
-    const blockPadX = cellX*0.22;
-    const blockPadY = cellY*0.22;
-    for (let x=0;x<gridSize-1;x++){
-      for (let y=0;y<gridSize-1;y++){
-        const x0 = ixToX(x) + blockPadX;
-        const y0 = iyToY(y) + blockPadY;
-        const x1 = ixToX(x+1) - blockPadX;
-        const y1 = iyToY(y+1) - blockPadY;
-        ctx.fillRect(x0, y0, x1-x0, y1-y0);
-      }
+    ctx.fillStyle = '#141a22';
+    ctx.fillRect(ox, oy, gridW, gridH);
+
+    ctx.fillStyle = '#242b37';
+    for(let i=0;i<cols-1;i++){
+      const x = ox + (i+1)*blockW + i*roadW;
+      ctx.fillRect(x, oy, roadW, gridH);
+    }
+    for(let j=0;j<rows-1;j++){
+      const y = oy + (j+1)*blockH + j*roadW;
+      ctx.fillRect(ox, y, gridW, roadW);
     }
 
-    // Roads
-    ctx.strokeStyle = col.road;
-    ctx.lineWidth = roadHalf*2;
-    ctx.lineCap = "butt";
-
-    // Horizontal roads
-    for (let y=0;y<gridSize;y++){
-      const yy = iyToY(y);
-      ctx.beginPath();
-      ctx.moveTo(ixToX(0), yy);
-      ctx.lineTo(ixToX(gridSize-1), yy);
-      ctx.stroke();
-    }
-    // Vertical roads
-    for (let x=0;x<gridSize;x++){
-      const xx = ixToX(x);
-      ctx.beginPath();
-      ctx.moveTo(xx, iyToY(0));
-      ctx.lineTo(xx, iyToY(gridSize-1));
-      ctx.stroke();
-    }
-
-    // Lane markings (center dashed)
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([7, 10]);
-    ctx.strokeStyle = col.lane;
-    // horizontal center
-    for (let y=0;y<gridSize;y++){
-      const yy = iyToY(y);
+    ctx.setLineDash([4,4]);
+    for(let i=0;i<cols-1;i++){
+      const x = ox + (i+1)*blockW + i*roadW + roadW/2;
       ctx.beginPath();
-      ctx.moveTo(ixToX(0), yy);
-      ctx.lineTo(ixToX(gridSize-1), yy);
+      ctx.moveTo(x, oy);
+      ctx.lineTo(x, oy+gridH);
       ctx.stroke();
     }
-    // vertical center
-    for (let x=0;x<gridSize;x++){
-      const xx = ixToX(x);
+    for(let j=0;j<rows-1;j++){
+      const y = oy + (j+1)*blockH + j*roadW + roadW/2;
       ctx.beginPath();
-      ctx.moveTo(xx, iyToY(0));
-      ctx.lineTo(xx, iyToY(gridSize-1));
+      ctx.moveTo(ox, y);
+      ctx.lineTo(ox+gridW, y);
       ctx.stroke();
     }
     ctx.setLineDash([]);
 
-    // Intersection light indicators
-    for (let x=0;x<gridSize;x++){
-      for (let y=0;y<gridSize;y++){
-        const st = lightStateAt(x,y,tSim);
-        const cx = ixToX(x), cy = iyToY(y);
+    for(let j=0;j<rows;j++){
+      for(let i=0;i<cols;i++){
+        const c = intersectionCenter(i,j);
+        const L = lightAt(i,j);
+        const t = L.t % L.cycle;
+        const horizGreen = t < L.greenA;
+        const amber = (!horizGreen) && (t < L.greenA + L.amber);
+        const hCol = horizGreen ? '#35d07f' : (amber ? '#d0b135' : '#d04a4a');
+        const vCol = (!horizGreen && !amber) ? '#35d07f' : (amber ? '#d0b135' : '#d04a4a');
 
-        // Small light dots for EW and NS
-        const r = 2.2;
-        // EW dot (west of center)
-        ctx.fillStyle = st.ewGreen ? col.green : (st.inYellow ? col.yellow : col.red);
-        ctx.beginPath(); ctx.arc(cx-6, cy-6, r, 0, Math.PI*2); ctx.fill();
-        // NS dot (east of center)
-        ctx.fillStyle = st.nsGreen ? col.green : (st.inYellow ? col.yellow : col.red);
-        ctx.beginPath(); ctx.arc(cx+6, cy+6, r, 0, Math.PI*2); ctx.fill();
-
-        // subtle pole
-        ctx.fillStyle = col.lightPole;
-        ctx.fillRect(cx-0.5, cy-0.5, 1, 1);
+        ctx.fillStyle = hCol;
+        ctx.fillRect(c.x-6, c.y-2, 12, 2);
+        ctx.fillStyle = vCol;
+        ctx.fillRect(c.x-2, c.y-6, 2, 12);
       }
     }
 
-    // Cars
-    for (let i=0;i<cars.length;i++){
-      const car = cars[i];
-      if (!car || !car.alive) continue;
-
-      const seg = car.seg;
-      const pos = segmentWorldPos(seg, car.s);
-      const ang = segmentAngle(seg);
-
-      // Brake lights if decelerating hard or stopped
-      const braking = (car.a < -80) || (car.v < 2 && distanceToRedLight(car, tSim) < 20);
-
+    for(const v of vehicles){
+      const p = worldPos(v.i,v.j,v.dir,v.seg);
+      const ang = Math.atan2(p.dy, p.dx);
+      const w = 3.2, h = v.len*0.55;
       ctx.save();
-      ctx.translate(pos.x, pos.y);
+      ctx.translate(p.x, p.y);
       ctx.rotate(ang);
-
-      // body
-      ctx.fillStyle = car.color;
-      ctx.fillRect(-car.length*0.5, -car.width*0.5, car.length, car.width);
-
-      // windshield / highlight
-      ctx.fillStyle = "rgba(255,255,255,0.22)";
-      ctx.fillRect(-car.length*0.05, -car.width*0.45, car.length*0.35, car.width*0.9);
-
-      // brake lights
-      if (braking){
-        ctx.fillStyle = "rgba(255,60,50,0.95)";
-        ctx.fillRect(-car.length*0.5, -car.width*0.5, 1.2, car.width*0.45);
-        ctx.fillRect(-car.length*0.5, car.width*0.05, 1.2, car.width*0.45);
-      }
-
+      ctx.fillStyle = v.color;
+      ctx.fillRect(-h*0.5, -w*0.5, h, w);
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.fillRect(h*0.05, -w*0.35, h*0.35, w*0.7);
       ctx.restore();
     }
-
-    // Vignette
-    const g = ctx.createRadialGradient(W*0.5,H*0.55, 80, W*0.5,H*0.55, Math.max(W,H));
-    g.addColorStop(0,"rgba(0,0,0,0)");
-    g.addColorStop(1,"rgba(0,0,0,0.5)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
   }
 
-  function frame(ts){
-    const elapsed = (ts - lastTs) / 1000;
-    lastTs = ts;
-    accum += Math.min(0.05, elapsed);
+  let last = performance.now();
+  function loop(t){
+    let dt = (t - last)/1000;
+    last = t;
+    dt = Math.max(0.001, Math.min(0.05, dt));
 
-    while (accum >= dtFixed){
-      update(dtFixed);
-      accum -= dtFixed;
-    }
+    const sub = 2;
+    const sdt = dt/sub;
+    for(let k=0;k<sub;k++) update(sdt);
+
     draw();
-    requestAnimationFrame(frame);
+    requestAnimationFrame(loop);
   }
 
-  // Restart every 10 seconds
-  let seedBase = (Date.now() ^ (Math.random()*1e9)) >>> 0;
-  reset(seedBase);
-  requestAnimationFrame(frame);
-
-  setInterval(() => {
-    seedBase = (seedBase + 0x9e3779b9) >>> 0;
-    reset(seedBase);
-  }, simResetSeconds * 1000);
+  for(let k=0;k<90;k++) spawnVehicle();
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>

@@ -2,217 +2,210 @@
 <html>
 <head>
 <style>
-html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000}
-canvas { background-color: #111; box-shadow: 0 0 20px rgba(0,0,0,0.8); }
+    body {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        background-color: #222;
+        overflow: hidden;
+    }
+    canvas {
+        background-color: #111;
+        box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
 </style>
 </head>
 <body>
-<canvas id="c" width="500" height="670"></canvas>
+
+<canvas id="simCanvas" width="250" height="400"></canvas>
+
 <script>
-const canvas = document.getElementById('c');
+const canvas = document.getElementById('simCanvas');
 const ctx = canvas.getContext('2d');
-const W = 500;
-const H = 670;
-const CX = W / 2;
-const CY = H / 2;
+const cx = canvas.width / 2;
+const cy = canvas.height / 2;
 
-// Physics Constants
-const GRAVITY = 0.25;
+// Physics constants
+const GRAVITY = 0.15;
 const FRICTION = 0.99; // Air resistance
-const WALL_BOUNCE = 0.6; // Bounciness against walls
-const WALL_FRICTION = 0.1; // Tangential force from spinning walls
+const WALL_BOUNCE = 0.7; // Energy kept after hitting wall
+const BALL_RADIUS = 4;
+const HEX_COUNT = 3;
 
-// State
-let startTime = Date.now();
 let balls = [];
-let hexagons = [];
+let frame = 0;
 
-class Hexagon {
-    constructor(radius, speed, gapIndex) {
-        this.radius = radius;
-        this.angle = 0;
-        this.speed = speed;
-        this.gapIndex = gapIndex; // Which side is missing (0-5)
-    }
-
-    update() {
-        this.angle += this.speed;
-    }
-
-    // Get line segments [x1, y1, x2, y2]
-    getSegments() {
-        let segments = [];
-        for (let i = 0; i < 6; i++) {
-            if (i === this.gapIndex) continue;
-            
-            const theta1 = this.angle + i * (Math.PI / 3);
-            const theta2 = this.angle + (i + 1) * (Math.PI / 3);
-            
-            segments.push({
-                x1: CX + this.radius * Math.cos(theta1),
-                y1: CY + this.radius * Math.sin(theta1),
-                x2: CX + this.radius * Math.cos(theta2),
-                y2: CY + this.radius * Math.sin(theta2),
-                nx: Math.cos(theta1 + Math.PI/3 + Math.PI/2), // Normal vector roughly
-                ny: Math.sin(theta1 + Math.PI/3 + Math.PI/2)
-            });
-        }
-        return segments;
-    }
-
-    draw() {
-        ctx.beginPath();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        
-        const segments = this.getSegments();
-        segments.forEach(seg => {
-            ctx.moveTo(seg.x1, seg.y1);
-            ctx.lineTo(seg.x2, seg.y2);
-        });
-        ctx.stroke();
-    }
-}
+// Hexagon Configuration
+const hexagons = [
+    { r: 40,  speed: 0.02,  angle: 0, gapIndex: 0, color: '#FF4136' },
+    { r: 80,  speed: -0.015, angle: 1, gapIndex: 2, color: '#2ECC40' },
+    { r: 120, speed: 0.01,  angle: 2, gapIndex: 4, color: '#0074D9' }
+];
 
 class Ball {
     constructor() {
-        this.r = 4 + Math.random() * 2;
-        this.x = CX + (Math.random() - 0.5) * 20;
-        this.y = CY + (Math.random() - 0.5) * 20;
-        this.vx = (Math.random() - 0.5) * 8;
-        this.vy = (Math.random() - 0.5) * 8;
-        this.color = `hsl(${Math.random() * 60 + 160}, 100%, 60%)`; // Cyans/Blues
+        this.x = cx;
+        this.y = cy;
+        // Random slight velocity to start so they don't stack perfectly
+        this.vx = (Math.random() - 0.5) * 4;
+        this.vy = (Math.random() - 0.5) * 4;
+        this.hue = Math.random() * 360;
+        this.markedForDeletion = false;
     }
 
     update() {
         this.vy += GRAVITY;
         this.vx *= FRICTION;
         this.vy *= FRICTION;
+
         this.x += this.vx;
         this.y += this.vy;
 
-        // Floor kill zone (reset if way off screen just in case, though usually reset handles this)
-        if (this.y > H + 100) {
-            // Ball is gone
+        // Remove if off screen
+        if (this.y > canvas.height + 50) {
+            this.markedForDeletion = true;
         }
     }
 
     draw() {
         ctx.beginPath();
-        ctx.fillStyle = this.color;
-        ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${this.hue}, 70%, 60%)`;
         ctx.fill();
+        ctx.closePath();
     }
 }
 
-function distToSegmentSquared(px, py, x1, y1, x2, y2) {
-    const l2 = (x1 - x2) ** 2 + (y1 - y2) ** 2;
-    if (l2 === 0) return (px - x1) ** 2 + (py - y1) ** 2;
-    let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+function getHexVertices(hex) {
+    let vertices = [];
+    for (let i = 0; i < 6; i++) {
+        let theta = hex.angle + (i * Math.PI * 2) / 6;
+        let x = cx + hex.r * Math.cos(theta);
+        let y = cy + hex.r * Math.sin(theta);
+        vertices.push({x, y});
+    }
+    return vertices;
+}
+
+// Distance from point p to line segment ab
+function distToSegmentSquared(p, a, b) {
+    let l2 = (a.x - b.x)**2 + (a.y - b.y)**2;
+    if (l2 == 0) return (p.x - a.x)**2 + (p.y - a.y)**2;
+    let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
     t = Math.max(0, Math.min(1, t));
     return {
-        distSq: (px - (x1 + t * (x2 - x1))) ** 2 + (py - (y1 + t * (y2 - y1))) ** 2,
-        closestX: x1 + t * (x2 - x1),
-        closestY: y1 + t * (y2 - y1)
+        distSq: (p.x - (a.x + t * (b.x - a.x)))**2 + (p.y - (a.y + t * (b.y - a.y)))**2,
+        closestX: a.x + t * (b.x - a.x),
+        closestY: a.y + t * (b.y - a.y)
     };
 }
 
-function resolveCollisions() {
-    // Check every ball against every wall of every hexagon
-    for (let b of balls) {
-        for (let h of hexagons) {
-            const segments = h.getSegments();
-            for (let seg of segments) {
-                const res = distToSegmentSquared(b.x, b.y, seg.x1, seg.y1, seg.x2, seg.y2);
+function checkCollisions(ball) {
+    hexagons.forEach(hex => {
+        let verts = getHexVertices(hex);
+        
+        for (let i = 0; i < 6; i++) {
+            // Skip the gap side
+            if (i === hex.gapIndex) continue;
+
+            let p1 = verts[i];
+            let p2 = verts[(i + 1) % 6];
+
+            let res = distToSegmentSquared(ball, p1, p2);
+            let dist = Math.sqrt(res.distSq);
+
+            if (dist < BALL_RADIUS) {
+                // Collision detected
                 
-                // Collision check
-                if (res.distSq < (b.r + 2.5) ** 2) { // 2.5 is half wall thickness
-                    const dist = Math.sqrt(res.distSq);
-                    const overlap = (b.r + 2.5) - dist;
-                    
-                    // Normal vector of collision
-                    let nx = b.x - res.closestX;
-                    let ny = b.y - res.closestY;
-                    
-                    // Normalize
-                    if (dist === 0) { nx = 0; ny = -1; } 
-                    else { nx /= dist; ny /= dist; }
+                // 1. Calculate Normal
+                let dx = ball.x - res.closestX;
+                let dy = ball.y - res.closestY;
+                let len = Math.sqrt(dx*dx + dy*dy);
+                
+                // Normal vector
+                let nx = dx / len;
+                let ny = dy / len;
+                
+                // 2. Push ball out of wall (overlap correction)
+                let overlap = BALL_RADIUS - dist;
+                ball.x += nx * overlap;
+                ball.y += ny * overlap;
 
-                    // Push ball out of wall to prevent sticking
-                    b.x += nx * overlap;
-                    b.y += ny * overlap;
-
-                    // Reflect velocity vector
-                    const dot = b.vx * nx + b.vy * ny;
-                    
-                    b.vx = b.vx - 2 * dot * nx;
-                    b.vy = b.vy - 2 * dot * ny;
-
-                    // Apply energy loss
-                    b.vx *= WALL_BOUNCE;
-                    b.vy *= WALL_BOUNCE;
-
-                    // Apply rotational friction from the wall
-                    // Determine tangent vector
-                    const tx = -ny;
-                    const ty = nx;
-                    
-                    // Add velocity based on wall rotation direction
-                    // Simple approximation: add tangential velocity based on wall speed
-                    const wallForce = h.speed * h.radius * 0.1;
-                    b.vx += tx * wallForce;
-                    b.vy += ty * wallForce;
-                }
+                // 3. Reflect Velocity
+                // v' = v - 2 * (v . n) * n
+                let dot = ball.vx * nx + ball.vy * ny;
+                
+                ball.vx = (ball.vx - 2 * dot * nx) * WALL_BOUNCE;
+                ball.vy = (ball.vy - 2 * dot * ny) * WALL_BOUNCE;
+                
+                // Add spin energy to ball tangent
+                // Cross product scalar simplified for 2D to add rotational friction
+                let tangentX = -ny;
+                let tangentY = nx;
+                let spinForce = hex.speed * 10; // Simple transfer of rotational momentum
+                ball.vx += tangentX * spinForce;
+                ball.vy += tangentY * spinForce;
             }
         }
-    }
+    });
 }
 
-function init() {
-    balls = [];
-    hexagons = [];
-    
-    // Create nested hexagons
-    // Radius, Rotation Speed, Missing Side Index
-    hexagons.push(new Hexagon(70, 0.02, 0));
-    hexagons.push(new Hexagon(140, -0.015, 2));
-    hexagons.push(new Hexagon(210, 0.01, 4));
+function drawHexagon(hex) {
+    let verts = getHexVertices(hex);
+    ctx.beginPath();
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = hex.color;
 
-    // Create balls
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 6; i++) {
+        if (i === hex.gapIndex) continue;
+        let p1 = verts[i];
+        let p2 = verts[(i + 1) % 6];
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+}
+
+function animate() {
+    ctx.fillStyle = 'rgba(17, 17, 17, 0.4)'; // Trails
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Update Hexagons
+    hexagons.forEach(h => {
+        h.angle += h.speed;
+        drawHexagon(h);
+    });
+
+    // Spawn Ball (every 10 frames)
+    if (frame % 10 === 0) {
         balls.push(new Ball());
     }
-    
-    startTime = Date.now();
-}
 
-function loop() {
-    // Check restart timer
-    if (Date.now() - startTime > 10000) {
-        init();
+    // Update Balls
+    for (let i = balls.length - 1; i >= 0; i--) {
+        let b = balls[i];
+        b.update();
+        checkCollisions(b);
+        b.draw();
+        if (b.markedForDeletion) {
+            balls.splice(i, 1);
+        }
     }
 
-    // Update
-    hexagons.forEach(h => h.update());
-    balls.forEach(b => b.update());
-    resolveCollisions();
+    // Limit max balls to prevent lag
+    if (balls.length > 250) {
+        balls.splice(0, 1);
+    }
 
-    // Draw
-    ctx.clearRect(0, 0, W, H);
-    
-    // Slight trail effect for motion blur feel (optional, but sticking to clean clear here for crisp lines)
-    // Actually, pure black clear looks best for physics crispness
-    
-    hexagons.forEach(h => h.draw());
-    balls.forEach(b => b.draw());
-
-    requestAnimationFrame(loop);
+    frame++;
+    requestAnimationFrame(animate);
 }
 
-// Start
-init();
-loop();
+animate();
 
 </script>
 </body>

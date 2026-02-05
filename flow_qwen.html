@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="flow" width="250" height="400"></canvas>
+<script>
+const canvas = document.getElementById('flow');
+const ctx = canvas.getContext('2d');
+const width = canvas.width;
+const height = canvas.height;
+
+let seed = 1;
+const particles = [];
+const numParticles = 2000;
+const fadeSpeed = 0.02;
+const particleSize = 1.2;
+const speed = 1.5;
+const noiseScale = 0.01;
+const timeScale = 0.001;
+
+function hash(n) {
+    n = Math.sin(n) * 10000;
+    return n - Math.floor(n);
+}
+
+function noise2D(x, y) {
+    const X = Math.floor(x);
+    const Y = Math.floor(y);
+    const xf = x - X;
+    const yf = y - Y;
+    
+    const u = xf * xf * (3 - 2 * xf);
+    const v = yf * yf * (3 - 2 * yf);
+    
+    const a = hash(X + hash(Y));
+    const b = hash(X + 1 + hash(Y));
+    const c = hash(X + hash(Y + 1));
+    const d = hash(X + 1 + hash(Y + 1));
+    
+    const i = a + u * (b - a);
+    const j = c + u * (d - c);
+    
+    return i + v * (j - i);
+}
+
+function curlNoise(x, y, t) {
+    const eps = 0.01;
+    const n1 = noise2D(x, y + eps) - noise2D(x, y - eps);
+    const n2 = noise2D(x + eps, y) - noise2D(x - eps, y);
+    return [n1 / (2 * eps), -n2 / (2 * eps)];
+}
+
+class Particle {
+    constructor() {
+        this.x = Math.random() * width;
+        this.y = Math.random() * height;
+        this.history = [];
+        this.maxHistory = 20;
+    }
+    
+    update(t) {
+        const nx = this.x * noiseScale;
+        const ny = this.y * noiseScale;
+        
+        let [vx, vy] = curlNoise(nx, ny, t);
+        
+        const len = Math.sqrt(vx * vx + vy * vy);
+        if (len > 0) {
+            vx = (vx / len) * speed;
+            vy = (vy / len) * speed;
+        }
+        
+        this.x += vx;
+        this.y += vy;
+        
+        if (this.x < 0) this.x = width;
+        if (this.x > width) this.x = 0;
+        if (this.y < 0) this.y = height;
+        if (this.y > height) this.y = 0;
+        
+        this.history.push({x: this.x, y: this.y});
+        if (this.history.length > this.maxHistory) {
+            this.history.shift();
+        }
+    }
+    
+    draw() {
+        for (let i = 0; i < this.history.length; i++) {
+            const point = this.history[i];
+            const alpha = i / this.history.length * 0.6;
+            ctx.fillStyle = `rgba(0, 200, 255, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, particleSize, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+}
+
+for (let i = 0; i < numParticles; i++) {
+    particles.push(new Particle());
+}
+
+function animate(t) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${fadeSpeed})`;
+    ctx.fillRect(0, 0, width, height);
+    
+    const time = t * timeScale;
+    
+    for (const p of particles) {
+        p.update(time);
+        p.draw();
+    }
+    
+    requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

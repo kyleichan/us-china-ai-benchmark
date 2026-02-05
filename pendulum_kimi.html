@@ -4,243 +4,389 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Double Pendulum Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        html, body {
+        body {
             margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
+            overflow: hidden;
+            background-color: #0f172a; /* Slate 900 */
             display: flex;
             justify-content: center;
             align-items: center;
-            background: #000;
-            overflow: hidden; /* Prevent scrollbars */
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         canvas {
-            display: block; /* Removes bottom spacing */
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            border-radius: 8px;
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        }
+        .overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.8);
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .stats {
+            font-variant-numeric: tabular-nums;
         }
     </style>
 </head>
 <body>
 
-    <canvas id="pendulumCanvas" width="500" height="670"></canvas>
-
-<script>
-    const canvas = document.getElementById('pendulumCanvas');
-    const ctx = canvas.getContext('2d');
-
-    // --- Physics Constants & Parameters ---
-    // Real-world approximations (scaled for screen)
-    const g = 9.81;       // Gravity (m/s^2)
-    const L1 = 1.5;       // Length of first rod (m)
-    const L2 = 1.5;       // Length of second rod (m)
-    const m1 = 1.0;       // Mass 1 (kg)
-    const m2 = 1.0;       // Mass 2 (kg)
-    
-    // Scaling for canvas (pixels per meter)
-    // Canvas is 500px wide, 670px high.
-    // We want it to fit roughly in the middle.
-    const scale = 110; 
-    const originX = canvas.width / 2;
-    const originY = canvas.height / 3; // Pivot point higher up
-
-    // --- State Variables ---
-    let theta1 = Math.PI / 1.1; // Initial angle 1 (near top)
-    let theta2 = Math.PI / 1.1; // Initial angle 2 (near top)
-    let omega1 = 0.0;           // Initial angular velocity 1
-    let omega2 = 0.0;           // Initial angular velocity 2
-    let t = 0.0;                // Simulation time
-
-    // Trail history: {x, y, speed}
-    let trail = [];
-    const MAX_TRAIL_LENGTH = 400;
-
-    // --- Physics Engine ---
-
-    function calculateDerivatives(state) {
-        // Unpack state
-        let [th1, th2, w1, w2] = state;
-
-        // Differential equations for double pendulum
-        // Source: standard physics derivation
+    <div class="overlay">
+        <h1 class="text-2xl font-bold tracking-wider mb-1">CHAOS ENGINE</h1>
+        <div class="text-xs text-slate-400 uppercase tracking-widest mb-4">Double Pendulum System</div>
         
-        let num1 = -g * (2 * m1 + m2) * Math.sin(th1);
-        let num2 = -m2 * g * Math.sin(th1 - 2 * th2);
-        let num3 = -2 * Math.sin(th1 - th2) * m2;
-        let num4 = (w2 * w2 * L2 + w1 * w1 * L1 * Math.cos(th1 - th2));
-        let den = L1 * (2 * m1 + m2 - m2 * Math.cos(2 * th1 - 2 * th2));
+        <div class="space-y-1 text-sm font-mono stats">
+            <div class="flex justify-between w-48"><span>Energy:</span> <span id="energy-val" class="text-cyan-400">0.00 J</span></div>
+            <div class="flex justify-between w-48"><span>Velocity:</span> <span id="vel-val" class="text-pink-400">0.00 rad/s</span></div>
+            <div class="flex justify-between w-48"><span>Push Timer:</span> <span id="push-timer" class="text-yellow-400">10.0s</span></div>
+        </div>
         
-        let alpha1 = (num1 + num2 + num3 * num4) / den;
+        <div class="mt-6 text-xs text-slate-500 max-w-[200px] leading-relaxed">
+            A deterministic system exhibiting sensitive dependence on initial conditions. 
+            <br><br>
+            <span class="text-cyan-500">Tip:</span> Push magnitude randomized every 10s.
+        </div>
+    </div>
 
-        let num5 = 2 * Math.sin(th1 - th2);
-        let num6 = (w1 * w1 * L1 * (m1 + m2));
-        let num7 = g * (m1 + m2) * Math.cos(th1);
-        let num8 = w2 * w2 * L2 * m2 * Math.cos(th1 - th2);
-        let den2 = L2 * (2 * m1 + m2 - m2 * Math.cos(2 * th1 - 2 * th2));
+    <!-- Canvas Container -->
+    <div id="canvas-container" class="relative">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <script>
+        /**
+         * DOUBLE PENDULUM SIMULATION
+         * Physics implementation using RK4 integration for stability.
+         * Rendered on HTML5 Canvas.
+         */
+
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI Elements
+        const energyEl = document.getElementById('energy-val');
+        const velEl = document.getElementById('vel-val');
+        const pushTimerEl = document.getElementById('push-timer');
+
+        // Configuration
+        let width, height, originX, originY;
+        const scale = 150; // Pixels per meter
         
-        let alpha2 = (num5 * (num6 + num7 + num8)) / den2;
+        // Physics State
+        // theta1, omega1, theta2, omega2
+        let state = {
+            t1: Math.PI / 1.9, // Start near top (almost vertical up)
+            w1: 0,
+            t2: Math.PI / 1.9,
+            w2: 0
+        };
 
-        return [w1, w2, alpha1, alpha2];
-    }
-
-    // 4th Order Runge-Kutta Integration
-    function rk4(dt) {
-        let state = [theta1, theta2, omega1, omega2];
-
-        let k1 = calculateDerivatives(state);
+        // Physical Constants
+        const g = 9.81;       // Gravity (m/s^2)
+        const m1 = 1.0;       // Mass 1 (kg)
+        const m2 = 1.0;       // Mass 2 (kg)
+        const l1 = 1.0;       // Length 1 (m)
+        const l2 = 1.0;       // Length 2 (m)
         
-        let state2 = [
-            state[0] + k1[0] * dt * 0.5, 
-            state[1] + k1[1] * dt * 0.5, 
-            state[2] + k1[2] * dt * 0.5, 
-            state[3] + k1[3] * dt * 0.5
-        ];
-        let k2 = calculateDerivatives(state2);
+        // Simulation Constants
+        const dt = 0.016;     // Time step (approx 60fps)
+        let lastPushTime = 0;
+        const pushInterval = 10; // Seconds
 
-        let state3 = [
-            state[0] + k2[0] * dt * 0.5, 
-            state[1] + k2[1] * dt * 0.5, 
-            state[2] + k2[2] * dt * 0.5, 
-            state[3] + k2[3] * dt * 0.5
-        ];
-        let k3 = calculateDerivatives(state3);
+        // Trail System
+        const maxTrailLength = 400;
+        const trail = []; // {x, y, v}
 
-        let state4 = [
-            state[0] + k3[0] * dt, 
-            state[1] + k3[1] * dt, 
-            state[2] + k3[2] * dt, 
-            state[3] + k3[3] * dt
-        ];
-        let k4 = calculateDerivatives(state4);
+        // Resize Handler
+        function resize() {
+            // Make canvas fit nicely in window but maintain aspect or just fill available space reasonably
+            // Let's make it a nice square or responsive block
+            const size = Math.min(window.innerWidth - 40, window.innerHeight - 40, 800);
+            canvas.width = size;
+            canvas.height = size;
+            width = canvas.width;
+            height = canvas.height;
+            originX = width / 2;
+            originY = height / 4; // Anchor point near top
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
-        // Update state
-        theta1 += (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]) * dt / 6;
-        theta2 += (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]) * dt / 6;
-        omega1 += (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]) * dt / 6;
-        omega2 += (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]) * dt / 6;
-        
-        t += dt;
-    }
+        // Physics Derivatives
+        // Returns [dtheta1/dt, domega1/dt, dtheta2/dt, domega2/dt]
+        function getDerivatives(s) {
+            const { t1, w1, t2, w2 } = s;
+            
+            const delta = t1 - t2;
+            const sinDelta = Math.sin(delta);
+            const cosDelta = Math.cos(delta);
+            
+            const den1 = (m1 + m2) * l1 - m2 * l1 * cosDelta * cosDelta;
+            const den2 = (l2 / l1) * den1;
 
-    // --- Rendering ---
+            // Angular Acceleration 1
+            const num1 = m2 * l1 * w1 * w1 * sinDelta * cosDelta +
+                         m2 * g * Math.sin(t2) * cosDelta +
+                         m2 * l2 * w2 * w2 * sinDelta -
+                         (m1 + m2) * g * Math.sin(t1);
+            
+            const alpha1 = num1 / den1;
 
-    function getPosition() {
-        let x1 = originX + L1 * scale * Math.sin(theta1);
-        let y1 = originY + L1 * scale * Math.cos(theta1);
-        let x2 = x1 + L2 * scale * Math.sin(theta2);
-        let y2 = y1 + L2 * scale * Math.cos(theta2);
-        return { x1, y1, x2, y2 };
-    }
+            // Angular Acceleration 2
+            const num2 = -m2 * l2 * w2 * w2 * sinDelta * cosDelta +
+                         (m1 + m2) * (g * Math.sin(t1) * cosDelta - l1 * w1 * w1 * sinDelta - g * Math.sin(t2));
+            
+            const alpha2 = num2 / den2;
 
-    function resetSimulation() {
-        theta1 = Math.PI / 1.1; // Near top (180 degrees is PI)
-        theta2 = Math.PI / 1.1;
-        omega1 = 0;
-        omega2 = 0;
-        t = 0;
-        trail = [];
-    }
-
-    function draw() {
-        // Clear Canvas
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Physics Update
-        // Time step for physics. 
-        // Running physics at a fixed sub-step ensures stability regardless of frame rate.
-        // We want 60 FPS visual, but physics might need smaller steps.
-        const timeStep = 1/120; 
-        rk4(timeStep);
-
-        // Get current positions
-        const pos = getPosition();
-
-        // Calculate instantaneous angular speed for color mapping
-        // We use the angular velocity of the second pendulum (omega2) relative to the first?
-        // Or absolute angular velocity. Let's use magnitude of omega2 for color intensity.
-        const speed = Math.abs(omega2); 
-
-        // Store trail
-        trail.push({ x: pos.x2, y: pos.y2, speed: speed });
-        if (trail.length > MAX_TRAIL_LENGTH) {
-            trail.shift();
+            return [w1, alpha1, w2, alpha2];
         }
 
-        // --- Draw Trail ---
-        if (trail.length > 1) {
-            for (let i = 1; i < trail.length; i++) {
-                let p1 = trail[i - 1];
-                let p2 = trail[i];
+        // RK4 Integration Step
+        function integrate() {
+            const s = state;
+            
+            const k1 = getDerivatives(s);
+            
+            const s2 = {
+                t1: s.t1 + k1[0] * dt * 0.5,
+                w1: s.w1 + k1[1] * dt * 0.5,
+                t2: s.t2 + k1[2] * dt * 0.5,
+                w2: s.w2 + k1[3] * dt * 0.5
+            };
+            const k2 = getDerivatives(s2);
+            
+            const s3 = {
+                t1: s.t1 + k2[0] * dt * 0.5,
+                w1: s.w1 + k2[1] * dt * 0.5,
+                t2: s.t2 + k2[2] * dt * 0.5,
+                w2: s.w2 + k2[3] * dt * 0.5
+            };
+            const k3 = getDerivatives(s3);
+            
+            const s4 = {
+                t1: s.t1 + k3[0] * dt,
+                w1: s.w1 + k3[1] * dt,
+                t2: s.t2 + k3[2] * dt,
+                w2: s.w2 + k3[3] * dt
+            };
+            const k4 = getDerivatives(s4);
+
+            // Update State
+            state.t1 += (dt / 6.0) * (k1[0] + 2*k2[0] + 2*k3[0] + k4[0]);
+            state.w1 += (dt / 6.0) * (k1[1] + 2*k2[1] + 2*k3[1] + k4[1]);
+            state.t2 += (dt / 6.0) * (k1[2] + 2*k2[2] + 2*k3[2] + k4[2]);
+            state.w2 += (dt / 6.0) * (k1[3] + 2*k2[3] + 2*k3[3] + k4[3]);
+        }
+
+        // Calculate Cartesian Coordinates
+        function getCoords() {
+            const x1 = originX + l1 * scale * Math.sin(state.t1);
+            const y1 = originY + l1 * scale * Math.cos(state.t1);
+            const x2 = x1 + l2 * scale * Math.sin(state.t2);
+            const y2 = y1 + l2 * scale * Math.cos(state.t2);
+            return { x1, y1, x2, y2 };
+        }
+
+        // Calculate Total Energy (for debugging/display)
+        function calculateEnergy() {
+            // Potential Energy
+            const h1 = -l1 * Math.cos(state.t1);
+            const h2 = h1 - l2 * Math.cos(state.t2);
+            const pe = m1 * g * h1 + m2 * g * h2;
+
+            // Kinetic Energy
+            // v1^2 = (l1 * w1)^2
+            const v1_sq = (l1 * state.w1)**2;
+            
+            // v2^2 = v1^2 + (l2*w2)^2 + 2*v1*(l2*w2)*cos(delta)
+            // Simplified vector addition:
+            // vx1 = l1*w1*cos(t1), vy1 = -l1*w1*sin(t1)
+            // vx2 = l2*w2*cos(t2), vy2 = -l2*w2*sin(t2)
+            // V_total_x = vx1 + vx2, V_total_y = vy1 + vy2
+            const vx1 = l1 * state.w1 * Math.cos(state.t1);
+            const vy1 = -l1 * state.w1 * Math.sin(state.t1);
+            const vx2_rel = l2 * state.w2 * Math.cos(state.t2);
+            const vy2_rel = -l2 * state.w2 * Math.sin(state.t2);
+            
+            const v2_sq = (vx1 + vx2_rel)**2 + (vy1 + vy2_rel)**2;
+
+            const ke = 0.5 * m1 * v1_sq + 0.5 * m2 * v2_sq;
+
+            return pe + ke;
+        }
+
+        // Drawing Helpers
+        function drawPendulum() {
+            const { x1, y1, x2, y2 } = getCoords();
+
+            // Draw Rod 1
+            ctx.beginPath();
+            ctx.moveTo(originX, originY);
+            ctx.lineTo(x1, y1);
+            ctx.strokeStyle = '#94a3b8'; // Slate 400
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Draw Rod 2
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = '#94a3b8';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+
+            // Draw Mass 1
+            ctx.beginPath();
+            ctx.arc(x1, y1, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#22d3ee'; // Cyan 400
+            ctx.fill();
+            ctx.shadowColor = '#22d3ee';
+            ctx.shadowBlur = 15;
+            ctx.stroke();
+            ctx.shadowBlur = 0; // Reset
+
+            // Draw Mass 2
+            ctx.beginPath();
+            ctx.arc(x2, y2, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#f472b6'; // Pink 400
+            ctx.fill();
+            ctx.shadowColor = '#f472b6';
+            ctx.shadowBlur = 15;
+            ctx.stroke();
+            ctx.shadowBlur = 0; // Reset
+
+            // Draw Pivot
+            ctx.beginPath();
+            ctx.arc(originX, originY, 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fill();
+        }
+
+        function drawTrail() {
+            if (trail.length < 2) return;
+
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            for (let i = 0; i < trail.length - 1; i++) {
+                const p1 = trail[i];
+                const p2 = trail[i+1];
+                
+                // Color based on velocity (speed of mass 2)
+                // Normalize velocity for color mapping (0 to 10 rad/s -> Hue)
+                const speed = Math.abs(p1.v);
+                const hue = Math.min(280, speed * 30); // Map speed to hue (Blue to Purple to Pink)
                 
                 ctx.beginPath();
                 ctx.moveTo(p1.x, p1.y);
                 ctx.lineTo(p2.x, p2.y);
                 
-                // Color mapping based on speed
-                // Low speed = Purple/Blue (260 hue), High speed = Yellow/Red (60 hue)
-                // Normalize speed roughly (0 to ~15 rad/s is fast for this system)
-                let normSpeed = Math.min(p2.speed / 10, 1); 
-                let hue = 260 - (normSpeed * 200); // 260 -> 60
-                let lightness = 30 + (normSpeed * 40); // Darker when slow, brighter when fast
-                
-                ctx.strokeStyle = `hsla(${hue}, 100%, ${lightness}%, 0.8)`;
-                ctx.lineWidth = 3;
-                ctx.lineCap = 'round';
-                ctx.lineJoin = 'round';
+                // Fade out alpha based on age
+                const alpha = i / trail.length;
+                ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${alpha})`;
+                ctx.lineWidth = 2 + (alpha * 2);
                 ctx.stroke();
             }
         }
 
-        // --- Draw Pendulum Rods ---
-        ctx.strokeStyle = '#FFFFFF';
-        ctx.lineWidth = 2;
-        
-        // Rod 1
-        ctx.beginPath();
-        ctx.moveTo(originX, originY);
-        ctx.lineTo(pos.x1, pos.y1);
-        ctx.stroke();
+        // Main Loop
+        let lastTime = performance.now();
+        let accumulatedTime = 0;
 
-        // Rod 2
-        ctx.beginPath();
-        ctx.moveTo(pos.x1, pos.y1);
-        ctx.lineTo(pos.x2, pos.y2);
-        ctx.stroke();
+        function loop() {
+            requestAnimationFrame(loop);
+            
+            const now = performance.now();
+            // const deltaTime = (now - lastTime) / 1000; // Real seconds elapsed
+            lastTime = now;
+            accumulatedTime += dt;
 
-        // --- Draw Masses ---
-        // Mass 1
-        ctx.fillStyle = '#AAAAAA';
-        ctx.beginPath();
-        ctx.arc(pos.x1, pos.y1, 8, 0, Math.PI * 2);
-        ctx.fill();
+            // Physics Sub-stepping (optional, but RK4 is good enough usually. 
+            // Let's just run 1 RK4 step per frame for 60fps visual)
+            integrate();
 
-        // Mass 2
-        ctx.fillStyle = '#FFFFFF';
-        ctx.beginPath();
-        ctx.arc(pos.x2, pos.y2, 8, 0, Math.PI * 2);
-        ctx.fill();
+            // Handle Automatic Push
+            const timeSincePush = accumulatedTime - lastPushTime;
+            const timeLeft = Math.max(0, pushInterval - timeSincePush);
+            pushTimerEl.textContent = timeLeft.toFixed(1) + 's';
 
-        // --- Pivot Point ---
-        ctx.fillStyle = '#555555';
-        ctx.beginPath();
-        ctx.arc(originX, originY, 5, 0, Math.PI * 2);
-        ctx.fill();
+            if (timeSincePush >= pushInterval) {
+                // PUSH!
+                const pushStrength = (Math.random() * 10 + 5); // Random magnitude
+                const pushDir = Math.random() > 0.5 ? 1 : -1;
+                
+                // Add to angular velocity of the first pendulum
+                state.w1 += pushStrength * pushDir * 0.5;
+                state.w2 += pushStrength * pushDir * 0.2;
+                
+                lastPushTime = accumulatedTime;
+                
+                // Visual feedback flash
+                flashScreen();
+            }
 
-        // --- Check Reset Condition ---
-        if (t >= 10.0) {
-            resetSimulation();
+            // Update Trail
+            const { x2, y2 } = getCoords();
+            // Velocity of mass 2 (approximate for color)
+            const v2 = Math.sqrt(state.w1**2 + state.w2**2); // Rough approx for color
+            
+            trail.push({ x: x2, y: y2, v: v2 });
+            if (trail.length > maxTrailLength) {
+                trail.shift();
+            }
+
+            // Clear & Draw
+            ctx.clearRect(0, 0, width, height);
+            
+            // Draw Grid (Subtle)
+            drawGrid();
+
+            drawTrail();
+            drawPendulum();
+
+            // Update Stats
+            if (Math.floor(now) % 5 === 0) { // Update text occasionally
+                energyEl.textContent = calculateEnergy().toFixed(2) + ' J';
+                velEl.textContent = v2.toFixed(2) + ' rad/s';
+            }
         }
 
-        requestAnimationFrame(draw);
-    }
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.lineWidth = 1;
+            const gridSize = 50;
+            
+            ctx.beginPath();
+            for(let x = 0; x < width; x += gridSize) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+            }
+            for(let y = 0; y < height; y += gridSize) {
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+            }
+            ctx.stroke();
+        }
 
-    // Handle resizing logic (though CSS keeps it centered, ensure internal logic is consistent)
-    // Since canvas size is fixed in HTML/CSS, we don't need complex resize logic here.
-    
-    // Start
-    requestAnimationFrame(draw);
+        function flashScreen() {
+            const flash = document.createElement('div');
+            flash.className = 'absolute inset-0 bg-white opacity-20 pointer-events-none transition-opacity duration-500';
+            document.body.appendChild(flash);
+            setTimeout(() => {
+                flash.classList.add('opacity-0');
+                setTimeout(() => flash.remove(), 500);
+            }, 50);
+        }
 
-</script>
+        // Start
+        loop();
+
+    </script>
 </body>
 </html>

@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower of Blocks</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c;
+            overflow: hidden; /* Prevent scrolling while playing */
+            touch-action: none; /* Prevent zoom/scroll on mobile */
+        }
+
+        canvas {
+            background: radial-gradient(circle at center, #2d3748 0%, #1a202c 100%);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            cursor: grab;
+        }
+
+        canvas:active {
+            cursor: grabbing;
+        }
+
+        .ui-overlay {
+            pointer-events: none;
+        }
+        
+        .interactive-btn {
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col items-center justify-center text-white select-none">
+
+    <!-- Header UI -->
+    <div class="absolute top-4 w-full max-w-2xl px-4 flex justify-between items-center z-10">
+        <div>
+            <h1 class="text-2xl font-extrabold tracking-tight text-indigo-400">QUAKE TOWER</h1>
+            <p class="text-xs text-gray-400">Stack high before the ground shakes.</p>
+        </div>
+        <div class="flex flex-col items-end">
+            <div class="text-right">
+                <span class="text-xs text-gray-400 uppercase tracking-wider">Height</span>
+                <div class="text-xl font-mono font-bold text-white"><span id="score">0</span>m</div>
+            </div>
+            <div class="text-right mt-1">
+                <span class="text-xs text-gray-500 uppercase tracking-wider">Next Quake</span>
+                <div class="w-24 h-2 bg-gray-700 rounded-full mt-1 overflow-hidden">
+                    <div id="quake-bar" class="h-full bg-red-500 w-full transition-all duration-100 ease-linear"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="gameCanvas" width="400" height="600" class="max-w-full max-h-[80vh] aspect-[2/3]"></canvas>
+
+    <!-- Controls / Instructions -->
+    <div class="absolute bottom-6 w-full text-center z-10 ui-overlay">
+        <div id="status-msg" class="text-sm text-indigo-300 font-medium opacity-0 transition-opacity duration-500">EARTHQUAKE IMMINENT!</div>
+        <div class="mt-2 text-xs text-gray-500">Drag blocks to stack • Don't let them fall</div>
+        <button id="audio-btn" class="interactive-btn mt-4 px-4 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-300 border border-gray-600 transition">
+            Enable Audio
+        </button>
+        <button id="reset-btn" class="interactive-btn ml-2 mt-4 px-4 py-1 bg-indigo-900 hover:bg-indigo-800 rounded text-xs text-indigo-200 border border-indigo-700 transition hidden">
+            Restart
+        </button>
+    </div>
+
+    <script>
+        /**
+         * Game Configuration & State
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Physics Constants
+        const GRAVITY = 0.5;
+        const FRICTION = 0.8; // Ground friction
+        const AIR_RESISTANCE = 0.99;
+        const BOUNCE = 0.2; // Restitution
+        const QUAKE_FORCE = 15;
+        const QUAKE_INTERVAL = 8000; // ms
+        const QUAKE_DURATION = 2000; // ms
+        
+        // State
+        let blocks = [];
+        let particles = [];
+        let lastTime = 0;
+        let isDragging = false;
+        let dragBlock = null;
+        let dragOffset = { x: 0, y: 0 };
+        let mouse = { x: 0, y: 0 };
+        let quakeTimer = 0;
+        let nextQuakeTime = QUAKE_INTERVAL;
+        let isQuaking = false;
+        let shakeIntensity = 0;
+        let gameOver = false;
+        let gameWon = false;
+        let audioEnabled = false;
+        let synth, noiseSynth;
+
+        // Colors
+        const PALETTE = [
+            '#F56565', // Red
+            '#ED8936', // Orange
+            '#ECC94B', // Yellow
+            '#48BB78', // Green
+            '#38B2AC', // Teal
+            '#4299E1', // Blue
+            '#667EEA', // Indigo
+            '#9F7AEA', // Purple
+            '#ED64A6', // Pink
+            '#CBD5E0'  // Gray
+        ];
+
+        /**
+         * Audio System (Tone.js)
+         */
+        async function initAudio() {
+            if (audioEnabled) return;
+            await Tone.start();
+            
+            // Synth for block thuds
+            synth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.005, decay: 0.1, sustain: 0.1, release: 0.5 }
+            }).toDestination();
+            synth.volume.value = -10;
+
+            // Noise synth for earthquakes
+            noiseSynth = new Tone.NoiseSynth({
+                noise: { type: 'brown' },
+                envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 }
+            }).toDestination();
+            noiseSynth.volume.value = -15;
+
+            audioEnabled = true;
+            document.getElementById('audio-btn').classList.add('hidden');
+        }
+
+        function playThud(velocity) {
+            if (!audioEnabled || velocity < 1) return;
+            // Pitch based on size (smaller = higher pitch) roughly simulated by random
+            const notes = ["C2", "D2", "E2", "G2", "A2"];
+            const note = notes[Math.floor(Math.random() * notes.length)];
+            const vel = Math.min(velocity / 20, 1); // Normalize velocity
+            synth.triggerAttackRelease(note, "16n", undefined, vel);
+        }
+
+        function playQuakeSound() {
+            if (!audioEnabled) return;
+            noiseSynth.triggerAttackRelease("2n");
+        }
+
+        function playWinSound() {
+            if (!audioEnabled) return;
+            const now = Tone.now();
+            synth.triggerAttackRelease("C4", "8n", now);
+            synth.triggerAttackRelease("E4", "8n", now + 0.1);
+            synth.triggerAttackRelease("G4", "8n", now + 0.2);
+            synth.triggerAttackRelease("C5", "2n", now + 0.3);
+        }
+
+        /**
+         * Classes
+         */
+        class Block {
+            constructor(x, y, w, h, color) {
+                this.x = x;
+                this.y = y;
+                this.w = w;
+                this.h = h;
+                this.color = color;
+                this.vx = 0;
+                this.vy = 0;
+                this.mass = w * h / 1000; // Approximate mass
+                this.isStatic = false; // Static blocks don't move (not used here, all dynamic)
+                this.id = Math.random().toString(36).substr(2, 9);
+                this.stable = false;
+            }
+
+            update() {
+                if (this === dragBlock) {
+                    // Dragging physics: Move towards mouse with some spring
+                    const targetX = mouse.x - dragOffset.x;
+                    const targetY = mouse.y - dragOffset.y;
+                    
+                    // Simple spring follow
+                    this.vx = (targetX - this.x) * 0.2;
+                    this.vy = (targetY - this.y) * 0.2;
+                    
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    
+                    // Reset velocity for physics calc when released
+                    this.vx = 0;
+                    this.vy = 0;
+                } else {
+                    // Gravity
+                    this.vy += GRAVITY;
+                    this.vx *= AIR_RESISTANCE;
+                    this.vy *= AIR_RESISTANCE;
+
+                    this.x += this.vx;
+                    this.y += this.vy;
+                }
+
+                // Floor Collision
+                if (this.y + this.h > canvas.height) {
+                    this.y = canvas.height - this.h;
+                    this.vy *= -BOUNCE;
+                    this.vx *= FRICTION;
+                    
+                    if (Math.abs(this.vy) > 1) playThud(Math.abs(this.vy));
+                }
+
+                // Wall Collision
+                if (this.x < 0) {
+                    this.x = 0;
+                    this.vx *= -BOUNCE;
+                }
+                if (this.x + this.w > canvas.width) {
+                    this.x = canvas.width - this.w;
+                    this.vx *= -BOUNCE;
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x + this.w/2, this.y + this.h/2);
+                
+                // Shake effect
+                if (isQuaking && this !== dragBlock) {
+                    ctx.translate((Math.random() - 0.5) * shakeIntensity, (Math.random() - 0.5) * shakeIntensity);
+                }
+
+                // Shadow
+                ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                ctx.fillRect(-this.w/2 + 4, -this.h/2 + 4, this.w, this.h);
+
+                // Block Body
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h);
+
+                // Highlight/Bevel effect
+                ctx.fillStyle = 'rgba(255,255,255,0.1)';
+                ctx.fillRect(-this.w/2, -this.h/2, this.w, this.h/2);
+                ctx.fillStyle = 'rgba(0,0,0,0.1)';
+                ctx.fillRect(-this.w/2, -this.h/2 + this.h/2, this.w, this.h/2);
+
+                // Border
+                ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-this.w/2, -this.h/2, this.w, this.h);
+
+                ctx.restore();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.life = 1.0;
+                this.color = color;
+                this.size = Math.random() * 4 + 2;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.5; // Gravity
+                this.life -= 0.02;
+            }
+            draw(ctx) {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        /**
+         * Physics Engine
+         */
+        function resolveCollisions() {
+            // Simple AABB Resolution
+            for (let i = 0; i < blocks.length; i++) {
+                for (let j = i + 1; j < blocks.length; j++) {
+                    let b1 = blocks[i];
+                    let b2 = blocks[j];
+
+                    // Skip if dragging one of them (handled by drag logic mostly, but good for safety)
+                    // Actually, if dragging, we want to push others away
+                    
+                    if (AABB(b1, b2)) {
+                        // Collision detected
+                        
+                        // Calculate overlap
+                        let dx = (b1.x + b1.w/2) - (b2.x + b2.w/2);
+                        let dy = (b1.y + b1.h/2) - (b2.y + b2.h/2);
+                        let width = (b1.w + b2.w) / 2;
+                        let height = (b1.h + b2.h) / 2;
+                        let crossWidth = width * dy;
+                        let crossHeight = height * dx;
+
+                        let collision = 'none';
+
+                        if (Math.abs(dx) <= width && Math.abs(dy) <= height) {
+                            if (crossWidth > crossHeight) {
+                                collision = (crossWidth > -crossHeight) ? 'bottom' : 'left';
+                            } else {
+                                collision = (crossWidth > -crossHeight) ? 'right' : 'top';
+                            }
+                        }
+
+                        // Resolve Position
+                        let overlapX = (b1.w + b2.w)/2 - Math.abs(dx);
+                        let overlapY = (b1.h + b2.h)/2 - Math.abs(dy);
+
+                        if (Math.abs(overlapX) < Math.abs(overlapY)) {
+                            // Horizontal collision
+                            if (dx > 0) {
+                                if (b1 !== dragBlock) b1.x += overlapX / 2;
+                                if (b2 !== dragBlock) b2.x -= overlapX / 2;
+                            } else {
+                                if (b1 !== dragBlock) b1.x -= overlapX / 2;
+                                if (b2 !== dragBlock) b2.x += overlapX / 2;
+                            }
+                            
+                            // Bounce
+                            if (b1 !== dragBlock && b2 !== dragBlock) {
+                                let vRel = b1.vx - b2.vx;
+                                let impulse = vRel * 0.5; // Simple mass ignore for now
+                                b1.vx -= impulse;
+                                b2.vx += impulse;
+                            }
+                        } else {
+                            // Vertical collision
+                            if (dy > 0) {
+                                // b1 is below b2
+                                if (b1 !== dragBlock) b1.y += overlapY / 2;
+                                if (b2 !== dragBlock) b2.y -= overlapY / 2;
+                            } else {
+                                // b1 is above b2
+                                if (b1 !== dragBlock) b1.y -= overlapY / 2;
+                                if (b2 !== dragBlock) b2.y += overlapY / 2;
+                            }
+
+                            // Bounce
+                            if (b1 !== dragBlock && b2 !== dragBlock) {
+                                let vRel = b1.vy - b2.vy;
+                                if (Math.abs(vRel) > 1) playThud(Math.abs(vRel));
+                                
+                                // Friction on surface contact
+                                b1.vx *= 0.9;
+                                b2.vx *= 0.9;
+
+                                let impulse = vRel * 0.5;
+                                b1.vy -= impulse;
+                                b2.vy += impulse;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function AABB(r1, r2) {
+            return (r1.x < r2.x + r2.w &&
+                    r1.x + r1.w > r2.x &&
+                    r1.y < r2.y + r2.h &&
+                    r1.y + r1.h > r2.y);
+        }
+
+        function checkWinCondition() {
+            // Calculate height of the highest block
+            let minY = canvas.height;
+            blocks.forEach(b => {
+                if (b.y < minY) minY = b.y;
+            });
+            
+            const height = Math.max(0, (canvas.height - minY) / 10).toFixed(1);
+            document.getElementById('score').innerText = height;
+
+            // Win if stable and > 300 units high
+            if (height > 28 && !gameWon) {
+                let allStable = true;
+                blocks.forEach(b => {
+                    if (Math.abs(b.vy) > 0.1 || Math.abs(b.vx) > 0.1) allStable = false;
+                });
+                
+                if (allStable) {
+                    gameWon = true;
+                    triggerConfetti();
+                    playWinSound();
+                    document.getElementById('status-msg').innerText = "TOWER COMPLETE!";
+                    document.getElementById('status-msg').classList.remove('opacity-0');
+                    document.getElementById('status-msg').classList.add('text-green-400');
+                    document.getElementById('reset-btn').classList.remove('hidden');
+                }
+            }
+
+            // Lose if blocks fall off screen (too low)
+            blocks.forEach(b => {
+                if (b.y > canvas.height) {
+                    if (!gameOver) {
+                        gameOver = true;
+                        document.getElementById('status-msg').innerText = "GAME OVER";
+                        document.getElementById('status-msg').classList.remove('opacity-0');
+                        document.getElementById('status-msg').classList.remove('text-indigo-300');
+                        document.getElementById('status-msg').classList.add('text-red-500');
+                        document.getElementById('reset-btn').classList.remove('hidden');
+                    }
+                }
+            });
+        }
+
+        function triggerConfetti() {
+            for(let i=0; i<100; i++) {
+                particles.push(new Particle(canvas.width/2, canvas.height/2, PALETTE[Math.floor(Math.random()*PALETTE.length)]));
+            }
+        }
+
+        function triggerEarthquake() {
+            isQuaking = true;
+            playQuakeSound();
+            document.getElementById('status-msg').innerText = "EARTHQUAKE!";
+            document.getElementById('status-msg').classList.remove('opacity-0');
+            
+            // Apply random horizontal forces to all blocks
+            blocks.forEach(b => {
+                if (b !== dragBlock) {
+                    b.vx += (Math.random() - 0.5) * QUAKE_FORCE;
+                    b.vy -= Math.random() * 2; // slight lift
+                }
+            });
+
+            setTimeout(() => {
+                isQuaking = false;
+                document.getElementById('status-msg').classList.add('opacity-0');
+            }, QUAKE_DURATION);
+        }
+
+        /**
+         * Game Loop
+         */
+        function init() {
+            // Create 10 random blocks
+            blocks = [];
+            for (let i = 0; i < 10; i++) {
+                const w = 40 + Math.random() * 40; // 40-80 width
+                const h = 30 + Math.random() * 30; // 30-60 height
+                const x = Math.random() * (canvas.width - w);
+                const y = Math.random() * (canvas.height/2) + (canvas.height/2 - 100); // Scatter on ground area
+                const color = PALETTE[i % PALETTE.length];
+                blocks.push(new Block(x, y, w, h, color));
+            }
+            
+            quakeTimer = 0;
+            gameOver = false;
+            gameWon = false;
+            document.getElementById('reset-btn').classList.add('hidden');
+            document.getElementById('status-msg').classList.add('opacity-0');
+        }
+
+        function loop(timestamp) {
+            const dt = timestamp - lastTime;
+            lastTime = timestamp;
+
+            // Clear
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Earthquake Logic
+            if (!gameOver && !gameWon) {
+                quakeTimer += dt;
+                const progress = Math.min(quakeTimer / nextQuakeTime, 1);
+                document.getElementById('quake-bar').style.width = `${(1 - progress) * 100}%`;
+
+                if (quakeTimer >= nextQuakeTime) {
+                    triggerEarthquake();
+                    quakeTimer = 0;
+                    nextQuakeTime = QUAKE_INTERVAL + (Math.random() * 2000 - 1000); // Randomize next quake slightly
+                }
+            }
+
+            // Shake Effect Calculation
+            if (isQuaking) {
+                shakeIntensity = 5;
+            } else {
+                shakeIntensity = 0;
+            }
+
+            ctx.save();
+            // Apply Camera Shake
+            if (shakeIntensity > 0) {
+                const dx = (Math.random() - 0.5) * shakeIntensity;
+                const dy = (Math.random() - 0.5) * shakeIntensity;
+                ctx.translate(dx, dy);
+            }
+
+            // Update & Draw Blocks
+            blocks.forEach(b => b.update());
+            resolveCollisions();
+            blocks.forEach(b => b.draw(ctx));
+
+            // Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw(ctx);
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            ctx.restore();
+
+            checkWinCondition();
+
+            requestAnimationFrame(loop);
+        }
+
+        /**
+         * Input Handling
+         */
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (evt.clientX - rect.left) * scaleX,
+                y: (evt.clientY - rect.top) * scaleY
+            };
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const pos = getMousePos(e);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+
+            // Find clicked block (reverse order to grab top-most)
+            for (let i = blocks.length - 1; i >= 0; i--) {
+                let b = blocks[i];
+                if (mouse.x >= b.x && mouse.x <= b.x + b.w &&
+                    mouse.y >= b.y && mouse.y <= b.y + b.h) {
+                    
+                    dragBlock = b;
+                    dragOffset.x = mouse.x - b.x;
+                    dragOffset.y = mouse.y - b.y;
+                    
+                    // Move to end of array to render on top
+                    blocks.splice(i, 1);
+                    blocks.push(b);
+                    
+                    isDragging = true;
+                    break;
+                }
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            const pos = getMousePos(e);
+            mouse.x = pos.x;
+            mouse.y = pos.y;
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            dragBlock = null;
+        });
+        
+        // Touch support
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const mx = (touch.clientX - rect.left) * scaleX;
+            const my = (touch.clientY - rect.top) * scaleY;
+            mouse.x = mx;
+            mouse.y = my;
+
+            for (let i = blocks.length - 1; i >= 0; i--) {
+                let b = blocks[i];
+                if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                    dragBlock = b;
+                    dragOffset.x = mx - b.x;
+                    dragOffset.y = my - b.y;
+                    blocks.splice(i, 1);
+                    blocks.push(b);
+                    isDragging = true;
+                    break;
+                }
+            }
+        }, {passive: false});
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            mouse.x = (touch.clientX - rect.left) * scaleX;
+            mouse.y = (touch.clientY - rect.top) * scaleY;
+        }, {passive: false});
+
+        window.addEventListener('touchend', () => {
+            isDragging = false;
+            dragBlock = null;
+        });
+
+        // UI Buttons
+        document.getElementById('audio-btn').addEventListener('click', initAudio);
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            init();
+        });
+
+        // Start
+        init();
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="traffic" width="250" height="250"></canvas>
+<script>
+const canvas = document.getElementById('traffic');
+const ctx = canvas.getContext('2d');
+const size = 250;
+const gridSize = 10;
+const cellSize = size / gridSize;
+const roads = [];
+const vehicles = [];
+const lights = [];
+
+class Road {
+  constructor(x, y, horizontal) {
+    this.x = x;
+    this.y = y;
+    this.horizontal = horizontal;
+    this.vehicles = [];
+  }
+}
+
+class Vehicle {
+  constructor(road, position, direction) {
+    this.road = road;
+    this.position = position;
+    this.direction = direction;
+    this.speed = 0;
+    this.maxSpeed = 2 + Math.random() * 1;
+    this.size = cellSize * 0.3;
+    this.color = `hsl(${Math.random() * 360}, 70%, 50%)`;
+    this.waiting = 0;
+  }
+  
+  update() {
+    const lightAhead = this.getLightAhead();
+    const vehicleAhead = this.getVehicleAhead();
+    
+    let targetSpeed = this.maxSpeed;
+    
+    if (lightAhead && lightAhead.state === 'red') {
+      const distToLight = this.distanceToLight(lightAhead);
+      if (distToLight < cellSize * 2) {
+        targetSpeed = Math.max(0, (distToLight / (cellSize * 2)) * this.maxSpeed);
+      }
+    }
+    
+    if (vehicleAhead) {
+      const distToVehicle = this.distanceToVehicle(vehicleAhead);
+      if (distToVehicle < cellSize * 1.5) {
+        targetSpeed = Math.min(targetSpeed, (distToVehicle / (cellSize * 1.5)) * this.maxSpeed);
+      }
+    }
+    
+    this.speed += (targetSpeed - this.speed) * 0.1;
+    this.speed = Math.max(0, Math.min(this.speed, this.maxSpeed));
+    
+    this.position += this.speed * this.direction;
+    
+    if (this.speed < 0.1) {
+      this.waiting++;
+    } else {
+      this.waiting = 0;
+    }
+    
+    if ((this.direction > 0 && this.position > size) || (this.direction < 0 && this.position < 0)) {
+      this.respawn();
+    }
+  }
+  
+  getLightAhead() {
+    if (this.road.horizontal) {
+      const nextIntersection = Math.floor(this.position / cellSize) + (this.direction > 0 ? 1 : 0);
+      if (nextIntersection >= 0 && nextIntersection < gridSize) {
+        return lights[nextIntersection][this.road.y];
+      }
+    } else {
+      const nextIntersection = Math.floor(this.position / cellSize) + (this.direction > 0 ? 1 : 0);
+      if (nextIntersection >= 0 && nextIntersection < gridSize) {
+        return lights[this.road.x][nextIntersection];
+      }
+    }
+    return null;
+  }
+  
+  distanceToLight(light) {
+    if (this.road.horizontal) {
+      const lightPos = light.x * cellSize;
+      return this.direction > 0 ? lightPos - this.position : this.position - lightPos;
+    } else {
+      const lightPos = light.y * cellSize;
+      return this.direction > 0 ? lightPos - this.position : this.position - lightPos;
+    }
+  }
+  
+  getVehicleAhead() {
+    for (const v of this.road.vehicles) {
+      if (v !== this && v.direction === this.direction) {
+        const diff = (v.position - this.position) * this.direction;
+        if (diff > 0 && diff < cellSize * 2) {
+          return v;
+        }
+      }
+    }
+    return null;
+  }
+  
+  distanceToVehicle(vehicle) {
+    return Math.abs(vehicle.position - this.position) - this.size;
+  }
+  
+  respawn() {
+    const horizontal = Math.random() > 0.5;
+    const roadIndex = Math.floor(Math.random() * gridSize);
+    const direction = Math.random() > 0.5 ? 1 : -1;
+    
+    if (horizontal) {
+      this.road = roads[roadIndex][0];
+      this.position = direction > 0 ? -this.size : size;
+    } else {
+      this.road = roads[0][roadIndex];
+      this.position = direction > 0 ? -this.size : size;
+    }
+    
+    this.direction = direction;
+    this.speed = 0;
+    this.road.vehicles.push(this);
+  }
+  
+  draw() {
+    ctx.fillStyle = this.color;
+    if (this.road.horizontal) {
+      ctx.fillRect(
+        this.position - this.size/2,
+        this.road.y * cellSize - this.size/2,
+        this.size,
+        this.size
+      );
+    } else {
+      ctx.fillRect(
+        this.road.x * cellSize - this.size/2,
+        this.position - this.size/2,
+        this.size,
+        this.size
+      );
+    }
+  }
+}
+
+class TrafficLight {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.state = 'green';
+    this.timer = 0;
+    this.cycleTime = 60 + Math.floor(Math.random() * 60);
+  }
+  
+  update() {
+    this.timer++;
+    if (this.timer > this.cycleTime) {
+      this.state = this.state === 'green' ? 'red' : 'green';
+      this.timer = 0;
+      this.cycleTime = 60 + Math.floor(Math.random() * 60);
+    }
+  }
+  
+  draw() {
+    ctx.fillStyle = this.state === 'green' ? '#0f0' : '#f00';
+    ctx.fillRect(
+      this.x * cellSize - 3,
+      this.y * cellSize - 3,
+      6,
+      6
+    );
+  }
+}
+
+function init() {
+  for (let i = 0; i < gridSize; i++) {
+    roads[i] = [];
+    for (let j = 0; j < gridSize; j++) {
+      roads[i][j] = [
+        new Road(i, j, true),
+        new Road(i, j, false)
+      ];
+    }
+  }
+  
+  for (let i = 0; i < gridSize; i++) {
+    lights[i] = [];
+    for (let j = 0; j < gridSize; j++) {
+      lights[i][j] = new TrafficLight(i, j);
+    }
+  }
+  
+  for (let i = 0; i < 150; i++) {
+    const horizontal = Math.random() > 0.5;
+    const roadIndex = Math.floor(Math.random() * gridSize);
+    const direction = Math.random() > 0.5 ? 1 : -1;
+    let road, position;
+    
+    if (horizontal) {
+      road = roads[roadIndex][0][0];
+      position = Math.random() * size;
+    } else {
+      road = roads[0][roadIndex][1];
+      position = Math.random() * size;
+    }
+    
+    const vehicle = new Vehicle(road, position, direction);
+    vehicles.push(vehicle);
+    road.vehicles.push(vehicle);
+  }
+}
+
+function update() {
+  for (let i = 0; i < gridSize; i++) {
+    for (let j = 0; j < gridSize; j++) {
+      lights[i][j].update();
+    }
+  }
+  
+  for (const vehicle of vehicles) {
+    vehicle.update();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, size, size);
+  
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1;
+  
+  for (let i = 0; i < gridSize; i++) {
+    for (let j = 0; j < gridSize; j++) {
+      ctx.beginPath();
+      ctx.moveTo(i * cellSize, 0);
+      ctx.lineTo(i * cellSize, size);
+      ctx.moveTo(0, j * cellSize);
+      ctx.lineTo(size, j * cellSize);
+      ctx.stroke();
+    }
+  }
+  
+  for (let i = 0; i < gridSize; i++) {
+    for (let j = 0; j < gridSize; j++) {
+      lights[i][j].draw();
+    }
+  }
+  
+  for (const vehicle of vehicles) {
+    vehicle.draw();
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+init();
+loop();
+</script>
+</body>
+</html>

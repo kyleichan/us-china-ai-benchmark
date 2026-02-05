@@ -11,34 +11,47 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Prompts - minimal output, no extra UI
-SUFFIX = " Don't use any external libraries. Output only the animation itself with no titles, headers, controls, sliders, instructions, or other UI elements. The canvas must be exactly 500x670 pixels. Use this exact CSS to center it: html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#000} Restart the animation every 10 seconds."
+SUFFIX = " Don't use external libraries. Output only the code. Don't include any additional text or comments. Don't have any sliders or user interface. Make the whole output fit within a 250x400px frame."
 
 PROMPTS = {
-    "hexagon": "Create an animation with three spinning hexagons that are nested one inside the next. Each hexagon is missing one side. There are little bouncy balls that start in the very center and bounce around until they fall out. Make the physics real with friction and bouncing." + SUFFIX,
+    "hexagon": "Create an animation with three spinning hexagons that are nested one inside the next. Each hexagon is missing one side. There are little bouncy balls that start in the very center and bounce around until they fall out. Make the physics real with friction and bouncing. Add new balls continuously." + SUFFIX,
     "flow": "Create a deterministic animated flow-field visualization. Use a smooth noise-based vector field to drive around 2,000 particles. Particles should leave fading trails and move continuously without jitter. Use curl noise to ensure particles don't converge into sinks. Normalize the velocity vectors so all particles move at constant speed. The animation must be reproducible from a single integer seed and run continuously. Introduce a small time-varying or curl component to the vector field so particle motion remains circulating rather than collapsing into sinks." + SUFFIX,
-    "pendulum": "Create an animation of a double pendulum swinging freely with normal gravity and inertia using only your own physics implementation (no external physics engines). Simulate the system in continuous time, render the motion smoothly, and draw a trailing path for the second mass. Color the trail based on instantaneous angular velocity. Start the pendulum near the top. Use real-world parameters and have the animation run at real-world speed (no slow-motion)." + SUFFIX,
-    "traffic": "Simulate and animate urban traffic from a top-down view. The city is a 10x10 street grid with traffic lights. Vehicles are autonomous agents with random origins and destinations that move continuously and follow only local rules (speed limits, following distance, red lights). Traffic congestion must emerge naturally, with queues and stop-and-go waves, not hard-coded behavior." + SUFFIX,
+    "pendulum": "Create an animation of a double pendulum swinging freely with normal gravity and inertia using only your own physics implementation (no external physics engines). Simulate the system in continuous time, render the motion smoothly, and draw a trailing path for the second mass. Color the trail based on instantaneous angular velocity. Start the pendulum near the top. Use real-world parameters and have the animation run at real-world speed (no slow-motion). Give the pendulum a hard push every 10 seconds." + SUFFIX,
+    "traffic": "Create an animation of simualted urban traffic from a top-down view. The city is a 10x10 street grid with traffic lights. Vehicles are autonomous agents with random origins and destinations that move continuously and follow only local rules (speed limits, following distance, red lights). Traffic congestion must emerge naturally, with queues and stop-and-go waves, not hard-coded behavior." + SUFFIX,
+    "blocks": "Create an HTML-only game where there are 10 blocks of different shapes and sizes scattered on the ground. You have to move the blocks and stack them into a tower without it falling over. Every few seconds, there's a mild earthquake. Use normal friction and gravity. Don't use external libraries. Output only the code. Make the whole output fit within a 200x300px frame.",
+    "minesweeper": "Create a fully playable Minesweeper game. Include a grid of cells that can be clicked to reveal what's underneath. Some cells contain mines, others show numbers indicating adjacent mines. Right-click to flag potential mines. Include win/lose conditions and a reset button." + SUFFIX,
 }
 
 def extract_html(response_text):
     """Extract HTML from markdown code blocks or return as-is."""
+    text = response_text.strip()
+
     # Try to find complete HTML document in code blocks
-    match = re.search(r'```(?:html)?\s*(<!DOCTYPE html>.*?</html>)\s*```', response_text, re.DOTALL | re.IGNORECASE)
+    match = re.search(r'```(?:html)?\s*(<!DOCTYPE html>.*?</html>)\s*```', text, re.DOTALL | re.IGNORECASE)
     if match:
-        return match.group(1)
+        return match.group(1).strip()
     # Try without DOCTYPE
-    match = re.search(r'```(?:html)?\s*(<html.*?</html>)\s*```', response_text, re.DOTALL | re.IGNORECASE)
+    match = re.search(r'```(?:html)?\s*(<html.*?</html>)\s*```', text, re.DOTALL | re.IGNORECASE)
     if match:
-        return match.group(1)
-    # If response starts with <!DOCTYPE or <html, return as-is
-    if response_text.strip().lower().startswith('<!doctype') or response_text.strip().lower().startswith('<html'):
-        return response_text.strip()
+        return match.group(1).strip()
+
+    # Strip leading ```html or ``` markers
+    text = re.sub(r'^```(?:html)?\s*', '', text, flags=re.IGNORECASE)
+    # Strip trailing ``` markers
+    text = re.sub(r'\s*```\s*$', '', text)
+    text = text.strip()
+
+    # If it now starts with <!DOCTYPE or <html, return it
+    if text.lower().startswith('<!doctype') or text.lower().startswith('<html'):
+        return text
+
     # Find any complete HTML document
-    match = re.search(r'(<!DOCTYPE html>.*?</html>)', response_text, re.DOTALL | re.IGNORECASE)
+    match = re.search(r'(<!DOCTYPE html>.*?</html>)', text, re.DOTALL | re.IGNORECASE)
     if match:
-        return match.group(1)
-    # Try to find partial HTML in code blocks (canvas + script) and wrap it
-    match = re.search(r'```(?:html)?\s*(<canvas.*?</script>)\s*```', response_text, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip()
+
+    # Try to find partial HTML (canvas + script) and wrap it
+    match = re.search(r'(<canvas.*?</script>)', text, re.DOTALL | re.IGNORECASE)
     if match:
         partial = match.group(1)
         return f'''<!DOCTYPE html>
@@ -51,7 +64,7 @@ def extract_html(response_text):
 {partial}
 </body>
 </html>'''
-    return response_text
+    return text
 
 def call_openai(prompt: str) -> dict:
     """Call OpenAI API."""
@@ -128,11 +141,32 @@ def call_kimi(prompt: str) -> dict:
     usage = data.get("usage", {})
     return {"content": extract_html(content), "usage": usage}
 
+def call_qwen(prompt: str) -> dict:
+    """Call Qwen API (US-Virginia endpoint) - uses coder model for coding prompts."""
+    api_key = os.getenv("QWEN_API_KEY")
+    response = requests.post(
+        "https://dashscope-us.aliyuncs.com/compatible-mode/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "qwen3-coder-plus",
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        timeout=300,
+    )
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    return {"content": extract_html(content), "usage": usage}
+
 MODELS = {
     "gpt": ("GPT-5.2", call_openai),
     "gemini": ("Gemini 3 Pro", call_gemini),
     "deepseek": ("DeepSeek V3.2", call_deepseek),
     "kimi": ("Kimi K2.5", call_kimi),
+    "qwen": ("Qwen3-Coder-Plus", call_qwen),
 }
 
 if __name__ == "__main__":

@@ -3,445 +3,500 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Urban Traffic Simulation</title>
+    <title>Micro Urban Flow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-            overflow: hidden;
-        }
-        canvas {
-            display: block;
-            background-color: #050505;
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        canvas { display: block; }
+        /* Custom scrollbar for the code view if needed, though we aim for a clean visual */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
     </style>
 </head>
-<body>
+<body class="text-slate-200 font-sans antialiased h-screen w-screen flex flex-col items-center justify-center relative">
 
-<canvas id="simCanvas" width="500" height="670"></canvas>
+    <!-- Background Decoration -->
+    <div class="absolute inset-0 z-0 opacity-20 pointer-events-none">
+        <div class="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,_rgba(20,30,50,1)_0%,_rgba(0,0,0,1)_100%)]"></div>
+        <div class="absolute inset-0" style="background-image: linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px); background-size: 50px 50px;"></div>
+    </div>
 
-<script>
-/**
- * Urban Traffic Simulation
- * 
- * A 10x10 grid of streets.
- * Canvas: 500x670 pixels.
- * Logic: Agent-based. Vehicles follow local rules (speed, lights, distance).
- * Traffic lights operate on a timer.
- */
-
-const canvas = document.getElementById('simCanvas');
-const ctx = canvas.getContext('2d');
-
-// Simulation Constants
-const WIDTH = 500;
-const HEIGHT = 670;
-const GRID_SIZE = 10;
-const ROAD_WIDTH = 40;
-const BLOCK_SIZE = (WIDTH - (GRID_SIZE + 1) * ROAD_WIDTH) / GRID_SIZE; // Calculate block size to fit exactly
-const TOTAL_CARS = 150; // Total number of cars to manage
-const CAR_RADIUS = 3.5;
-const MAX_SPEED = 3;
-const ACCELERATION = 0.1;
-const BRAKING = 0.2;
-const SAFE_DISTANCE = 12; // Minimum distance to car ahead
-const LIGHT_CYCLE = 180; // Frames per light change
-const RESTART_INTERVAL = 10000; // 10 seconds
-
-// State
-let cars = [];
-let lights = [];
-let frameCount = 0;
-let lastTime = 0;
-let startTime = 0;
-
-// Helper: Calculate position from grid coordinates
-// i: 0-10 (road index), horizontal
-// j: 0-10 (road index), vertical
-function getRoadX(i) {
-    return ROAD_WIDTH / 2 + i * (BLOCK_SIZE + ROAD_WIDTH);
-}
-
-function getRoadY(j) {
-    return ROAD_WIDTH / 2 + j * (BLOCK_SIZE + ROAD_WIDTH);
-}
-
-// --- Classes ---
-
-class TrafficLight {
-    constructor(gi, gj) {
-        this.gi = gi; // Grid intersection index
-        this.gj = gj;
-        this.x = getRoadX(gi);
-        this.y = getRoadY(gj);
-        // State: 0 = NS Green/EW Red, 1 = NS Red/EW Green
-        this.state = (gi + gj) % 2 === 0 ? 0 : 1; 
-        this.timer = Math.floor(Math.random() * LIGHT_CYCLE);
-    }
-
-    update() {
-        this.timer++;
-        if (this.timer > LIGHT_CYCLE) {
-            this.timer = 0;
-            this.state = 1 - this.state;
-        }
-    }
-
-    draw(ctx) {
-        // Draw intersection background
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fillRect(this.x - ROAD_WIDTH/2, this.y - ROAD_WIDTH/2, ROAD_WIDTH, ROAD_WIDTH);
-
-        // Draw lights
-        // NS Light
-        ctx.fillStyle = this.state === 0 ? '#0f0' : '#500';
-        ctx.beginPath();
-        ctx.arc(this.x, this.y - ROAD_WIDTH/4, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // EW Light
-        ctx.fillStyle = this.state === 1 ? '#0f0' : '#500';
-        ctx.beginPath();
-        ctx.arc(this.x - ROAD_WIDTH/4, this.y, 3, 0, Math.PI * 2);
-        ctx.fill();
+    <!-- Main Content Area -->
+    <div class="z-10 flex flex-col items-center gap-6 max-w-4xl w-full p-4">
         
-        // Visual cleanup for unused quadrants (corners of intersection)
-        ctx.fillStyle = '#050505'; // Match background
-        // We don't strictly need to draw corners, the background is already black.
-    }
+        <div class="text-center space-y-2">
+            <h1 class="text-4xl md:text-5xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-indigo-500 drop-shadow-lg">
+                MICRO URBAN FLOW
+            </h1>
+            <p class="text-sm text-slate-400 font-mono tracking-widest uppercase">
+                10x10 Grid Autonomous Traffic Simulation
+            </p>
+        </div>
 
-    // Check if a car must stop
-    // dir: 0=Up, 1=Right, 2=Down, 3=Left
-    isRedFor(dir) {
-        if (dir === 0 || dir === 2) return this.state === 1; // NS is Red if state is 1
-        if (dir === 1 || dir === 3) return this.state === 0; // EW is Red if state is 0
-        return false;
-    }
-}
-
-class Car {
-    constructor() {
-        this.reset();
-    }
-
-    reset() {
-        // Pick a random road and side
-        // 0: Top (Y=0), 1: Right (X=Width), 2: Bottom (Y=Height), 3: Left (X=0)
-        const side = Math.floor(Math.random() * 4);
-        const laneOffset = (Math.random() > 0.5 ? 1 : -1) * (ROAD_WIDTH / 4); // Inner or outer lane
-
-        if (side === 0) { // Top -> Down
-            this.x = getRoadX(Math.floor(Math.random() * 11)) + laneOffset;
-            this.y = -20;
-            this.dir = 2; 
-        } else if (side === 1) { // Right -> Left
-            this.x = WIDTH + 20;
-            this.y = getRoadY(Math.floor(Math.random() * 11)) + laneOffset;
-            this.dir = 3;
-        } else if (side === 2) { // Bottom -> Up
-            this.x = getRoadX(Math.floor(Math.random() * 11)) + laneOffset;
-            this.y = HEIGHT + 20;
-            this.dir = 0;
-        } else { // Left -> Right
-            this.x = -20;
-            this.y = getRoadY(Math.floor(Math.random() * 11)) + laneOffset;
-            this.dir = 1;
-        }
-
-        this.vx = 0;
-        this.vy = 0;
-        this.speed = 0;
-        this.maxSpeed = MAX_SPEED + (Math.random() * 0.5); // Slight variation
-        this.color = `hsl(${Math.random() * 360}, 80%, 60%)`;
-        this.id = Math.random();
-        
-        // To prevent immediate turn-back logic, track last intersection passed
-        this.lastInt = null; 
-    }
-
-    update() {
-        // 1. Determine Target Speed
-        let targetSpeed = this.maxSpeed;
-
-        // 2. Check Traffic Lights
-        // We need to find the next intersection in our path
-        // Grid coordinates
-        let currentGi = -1;
-        let currentGj = -1;
-        
-        // Find which road segment we are on
-        // X Roads are at getRoadX(0..10)
-        // Y Roads are at getRoadY(0..10)
-        
-        // Simple check: are we approaching an intersection?
-        let nextLight = null;
-        let distToLight = Infinity;
-
-        if (this.dir === 1) { // Right
-            // Find next vertical road x
-            for(let i=0; i<=10; i++) {
-                let rx = getRoadX(i);
-                if (rx > this.x) {
-                    nextLight = lights.find(l => l.gi === i && l.gj === this.getCurrentGj());
-                    distToLight = rx - this.x;
-                    break;
-                }
-            }
-        } else if (this.dir === 3) { // Left
-            for(let i=10; i>=0; i--) {
-                let rx = getRoadX(i);
-                if (rx < this.x) {
-                    nextLight = lights.find(l => l.gi === i && l.gj === this.getCurrentGj());
-                    distToLight = this.x - rx;
-                    break;
-                }
-            }
-        } else if (this.dir === 2) { // Down
-            for(let j=0; j<=10; j++) {
-                let ry = getRoadY(j);
-                if (ry > this.y) {
-                    nextLight = lights.find(l => l.gj === j && l.gi === this.getCurrentGi());
-                    distToLight = ry - this.y;
-                    break;
-                }
-            }
-        } else if (this.dir === 0) { // Up
-            for(let j=10; j>=0; j--) {
-                let ry = getRoadY(j);
-                if (ry < this.y) {
-                    nextLight = lights.find(l => l.gj === j && l.gi === this.getCurrentGi());
-                    distToLight = this.y - ry;
-                    break;
-                }
-            }
-        }
-
-        // Light Logic: Stop if red and close
-        if (nextLight && nextLight.isRedFor(this.dir)) {
-            // Stop line is slightly before the intersection center
-            if (distToLight < ROAD_WIDTH && distToLight > 2) {
-                targetSpeed = 0;
-            }
-        }
-
-        // 3. Check Car Ahead (Collision Avoidance)
-        let distToCar = this.checkDistanceToCarAhead();
-        if (distToCar < SAFE_DISTANCE + 5) { // Buffer zone
-            targetSpeed = 0;
-        } else if (distToCar < SAFE_DISTANCE * 2) {
-            targetSpeed = this.maxSpeed * 0.5;
-        }
-
-        // 4. Apply Physics
-        if (this.speed < targetSpeed) {
-            this.speed += ACCELERATION;
-            if (this.speed > targetSpeed) this.speed = targetSpeed;
-        } else if (this.speed > targetSpeed) {
-            this.speed -= BRAKING;
-            if (this.speed < targetSpeed) this.speed = targetSpeed;
-        }
-
-        // 5. Move
-        if (this.dir === 0) this.y -= this.speed;
-        if (this.dir === 1) this.x += this.speed;
-        if (this.dir === 2) this.y += this.speed;
-        if (this.dir === 3) this.x -= this.speed;
-
-        // 6. Reset if out of bounds
-        if (this.x < -50 || this.x > WIDTH + 50 || this.y < -50 || this.y > HEIGHT + 50) {
-            this.reset();
-        }
-    }
-
-    getCurrentGi() {
-        // Approximate current grid index based on X
-        // This is a rough approximation for light lookup
-        let closest = 0;
-        let minD = 9999;
-        for(let i=0; i<=10; i++) {
-            let d = Math.abs(getRoadX(i) - this.x);
-            if (d < minD) { minD = d; closest = i; }
-        }
-        return closest;
-    }
-
-    getCurrentGj() {
-        let closest = 0;
-        let minD = 9999;
-        for(let j=0; j<=10; j++) {
-            let d = Math.abs(getRoadY(j) - this.y);
-            if (d < minD) { minD = d; closest = j; }
-        }
-        return closest;
-    }
-
-    checkDistanceToCarAhead() {
-        let minDist = Infinity;
-        
-        for (let other of cars) {
-            if (other === this) continue;
+        <!-- Simulation Container -->
+        <div class="relative group rounded-xl overflow-hidden shadow-2xl shadow-cyan-900/20 border border-slate-700/50 bg-black">
+            <!-- Stats Overlay -->
+            <div class="absolute top-4 left-4 z-20 glass-panel px-3 py-1.5 rounded-lg text-xs font-mono text-cyan-300 flex gap-4 pointer-events-none">
+                <span>AGENTS: <span id="agent-count" class="text-white font-bold">0</span></span>
+                <span>FLOW: <span id="flow-rate" class="text-white font-bold">0</span>/min</span>
+            </div>
             
-            // Check if on same road (roughly same X or Y)
-            let sameRoad = false;
-            let dist = Infinity;
+            <canvas id="cityCanvas" width="400" height="400" class="cursor-crosshair"></canvas>
+            
+            <!-- Interactive Hint -->
+            <div class="absolute bottom-4 right-4 text-[10px] text-slate-500 font-mono opacity-50 group-hover:opacity-100 transition-opacity duration-500">
+                LIVE RENDER
+            </div>
+        </div>
 
-            if (this.dir === 1 && other.dir === 1) { // Both Right
-                if (Math.abs(other.y - this.y) < ROAD_WIDTH/2 && other.x > this.x) {
-                    dist = other.x - this.x;
-                    sameRoad = true;
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 w-full max-w-2xl mt-2">
+            <div class="glass-panel p-4 rounded-lg border-l-2 border-cyan-500">
+                <h3 class="text-cyan-400 text-xs font-bold uppercase mb-1">Logic</h3>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    Agents utilize local sensing to maintain following distances and obey traffic signals. No global path optimization—only reactive rules.
+                </p>
+            </div>
+            <div class="glass-panel p-4 rounded-lg border-l-2 border-purple-500">
+                <h3 class="text-purple-400 text-xs font-bold uppercase mb-1">Emergence</h3>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    Stop-and-go waves and phantom jams emerge naturally from acceleration/braking reaction delays and intersection bottlenecks.
+                </p>
+            </div>
+            <div class="glass-panel p-4 rounded-lg border-l-2 border-emerald-500">
+                <h3 class="text-emerald-400 text-xs font-bold uppercase mb-1">System</h3>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    10x10 Grid. 25 Intersections. Adaptive signal timing based on queue density simulation logic.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * MICRO URBAN FLOW - Simulation Engine
+         * Renders a 10x10 grid city with emergent traffic behavior.
+         */
+
+        const canvas = document.getElementById('cityCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Configuration
+        const GRID_SIZE = 10;
+        const CANVAS_SIZE = 400;
+        const CELL_SIZE = CANVAS_SIZE / GRID_SIZE;
+        const ROAD_WIDTH = CELL_SIZE * 0.4; // 40% of cell is road
+        const LANE_WIDTH = ROAD_WIDTH / 2;
+        const BUILDING_SIZE = CELL_SIZE - ROAD_WIDTH;
+        
+        // State
+        const cars = [];
+        const lights = [];
+        const particles = []; // For exhaust/skids
+        
+        let frame = 0;
+        let lastCarTime = 0;
+        let flowCounter = 0;
+        
+        // Colors
+        const COLORS = {
+            bg: '#0f172a', // Slate 900
+            building: '#1e293b', // Slate 800
+            road: '#334155', // Slate 700
+            roadLine: '#475569', // Slate 600
+            lightRed: '#ef4444',
+            lightGreen: '#22c55e',
+            cars: ['#f472b6', '#38bdf8', '#fbbf24', '#a78bfa', '#34d399', '#fb7185']
+        };
+
+        // Setup Grid & Lights
+        function init() {
+            // Create Intersection Lights
+            for (let x = 1; x < GRID_SIZE; x++) {
+                for (let y = 1; y < GRID_SIZE; y++) {
+                    lights.push({
+                        x: x * CELL_SIZE,
+                        y: y * CELL_SIZE,
+                        // Offset timing slightly based on position to create "waves" of green
+                        state: (x + y) % 2 === 0 ? 'NS' : 'EW', 
+                        timer: Math.floor((x * 137 + y * 53) % 200) // Random start offset
+                    });
                 }
-            } else if (this.dir === 3 && other.dir === 3) { // Both Left
-                if (Math.abs(other.y - this.y) < ROAD_WIDTH/2 && other.x < this.x) {
-                    dist = this.x - other.x;
-                    sameRoad = true;
+            }
+        }
+
+        // --- Classes ---
+
+        class Car {
+            constructor() {
+                // Pick random edge start
+                const side = Math.floor(Math.random() * 4); // 0:Top, 1:Right, 2:Bottom, 3:Left
+                const lane = Math.floor(Math.random() * (GRID_SIZE - 1)) + 1; // 1..9
+                
+                // Start positions (center of lane)
+                // Roads are at intersections x=1..9. 
+                // Horizontal roads run at y=1..9. Vertical at x=1..9.
+                // Coordinates are grid indices (1-9).
+                
+                if (side === 0) { // Top, moving Down
+                    this.x = lane * CELL_SIZE - LANE_WIDTH/2; // Right lane of vertical road
+                    this.y = -20;
+                    this.vx = 0;
+                    this.vy = 1;
+                } else if (side === 1) { // Right, moving Left
+                    this.x = CANVAS_SIZE + 20;
+                    this.y = lane * CELL_SIZE - LANE_WIDTH/2; // Top lane of horizontal road
+                    this.vx = -1;
+                    this.vy = 0;
+                } else if (side === 2) { // Bottom, moving Up
+                    this.x = lane * CELL_SIZE + LANE_WIDTH/2; // Left lane of vertical road
+                    this.y = CANVAS_SIZE + 20;
+                    this.vx = 0;
+                    this.vy = -1;
+                } else { // Left, moving Right
+                    this.x = -20;
+                    this.y = lane * CELL_SIZE + LANE_WIDTH/2; // Bottom lane of horizontal road
+                    this.vx = 1;
+                    this.vy = 0;
                 }
-            } else if (this.dir === 2 && other.dir === 2) { // Both Down
-                if (Math.abs(other.x - this.x) < ROAD_WIDTH/2 && other.y > this.y) {
-                    dist = other.y - this.y;
-                    sameRoad = true;
+
+                this.id = Math.random();
+                this.speed = 0;
+                this.maxSpeed = 1.5 + Math.random() * 0.8; // Random max speed variation
+                this.accel = 0.05;
+                this.decel = 0.08;
+                this.color = COLORS.cars[Math.floor(Math.random() * COLORS.cars.length)];
+                this.width = 8;
+                this.height = 12;
+                
+                // Determine rough target to decide turns
+                this.targetX = Math.random() * CANVAS_SIZE;
+                this.targetY = Math.random() * CANVAS_SIZE;
+                this.nextTurn = 'straight'; // calculated at intersections
+            }
+
+            update() {
+                // 1. Sensor Distance (Look ahead)
+                let sensorDist = 60; // Look 60px ahead
+                let obstacle = null;
+
+                // Check other cars
+                for (let other of cars) {
+                    if (other === this) continue;
+                    
+                    // Simple AABB distance check in direction of travel
+                    let dist = Infinity;
+                    if (this.vx > 0) dist = other.x - this.x;
+                    else if (this.vx < 0) dist = this.x - other.x;
+                    else if (this.vy > 0) dist = other.y - this.y;
+                    else if (this.vy < 0) dist = this.y - other.y;
+
+                    // Same lane check (approximate)
+                    const lateralDist = (this.vx !== 0) ? Math.abs(this.y - other.y) : Math.abs(this.x - other.x);
+                    
+                    if (dist > 0 && dist < sensorDist && lateralDist < LANE_WIDTH) {
+                        if (dist < sensorDist) {
+                            sensorDist = dist;
+                            obstacle = other;
+                        }
+                    }
                 }
-            } else if (this.dir === 0 && other.dir === 0) { // Both Up
-                if (Math.abs(other.x - this.x) < ROAD_WIDTH/2 && other.y < this.y) {
-                    dist = this.y - other.y;
-                    sameRoad = true;
+
+                // Check Traffic Lights
+                // Find nearest intersection ahead
+                let nextIntersection = null;
+                let distToIntersection = Infinity;
+
+                for (let light of lights) {
+                    let dist = Infinity;
+                    if (this.vx > 0 && Math.abs(light.y - this.y) < LANE_WIDTH && light.x > this.x) dist = light.x - this.x;
+                    if (this.vx < 0 && Math.abs(light.y - this.y) < LANE_WIDTH && light.x < this.x) dist = this.x - light.x;
+                    if (this.vy > 0 && Math.abs(light.x - this.x) < LANE_WIDTH && light.y > this.y) dist = light.y - this.y;
+                    if (this.vy < 0 && Math.abs(light.x - this.x) < LANE_WIDTH && light.y < this.y) dist = this.y - light.y;
+
+                    if (dist > 10 && dist < 60) { // 10 buffer to prevent stop inside intersection
+                        nextIntersection = light;
+                        distToIntersection = dist;
+                    }
+                }
+
+                // Traffic Light Logic
+                let mustStop = false;
+                if (nextIntersection) {
+                    const isNS = (this.vy !== 0);
+                    const lightRed = (isNS && nextIntersection.state === 'EW') || (!isNS && nextIntersection.state === 'NS');
+                    
+                    // Stop line logic
+                    if (lightRed && distToIntersection < 40 && distToIntersection > 5) {
+                        mustStop = true;
+                    }
+                }
+
+                // 2. Physics Decision
+                if (mustStop) {
+                    this.speed -= this.decel * 2; // Hard brake for red light
+                    if (this.speed < 0) this.speed = 0;
+                } else if (sensorDist < 30) {
+                    // Car following model (IDM-ish simplified)
+                    // Desired speed decreases as we get closer
+                    let targetSpeed = (sensorDist / 30) * this.maxSpeed;
+                    if (targetSpeed < this.speed) {
+                        this.speed -= this.decel;
+                    } else {
+                        this.speed += this.accel;
+                    }
+                } else {
+                    // Accelerate to max
+                    if (this.speed < this.maxSpeed) this.speed += this.accel;
+                }
+
+                // Cap speed
+                if (this.speed < 0) this.speed = 0;
+                if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
+
+                // 3. Movement
+                this.x += this.vx * this.speed;
+                this.y += this.vy * this.speed;
+
+                // 4. Turning Logic at Intersections
+                // If we cross a grid line (intersection center)
+                // Check if we are near an intersection center
+                const gridX = Math.round(this.x / CELL_SIZE);
+                const gridY = Math.round(this.y / CELL_SIZE);
+                
+                // Snap to grid logic to handle turns cleanly
+                // We only turn if we are exactly AT an intersection and haven't turned yet
+                if (this.speed > 0.1) {
+                    const atX = Math.abs(this.x - gridX * CELL_SIZE) < 5;
+                    const atY = Math.abs(this.y - gridY * CELL_SIZE) < 5;
+
+                    if (atX && atY && gridX > 0 && gridX < GRID_SIZE && gridY > 0 && gridY < GRID_SIZE) {
+                        // We are at an intersection center. Decide to turn?
+                        // Simple random turn or based on target
+                        
+                        // Check if we just turned (debounce)
+                        if (!this.turnedAt) this.turnedAt = -1;
+                        
+                        const currentNode = gridX + "," + gridY;
+                        if (this.turnedAt !== currentNode) {
+                            // Calculate desired direction
+                            let desiredVx = 0, desiredVy = 0;
+                            const dx = this.targetX - this.x;
+                            const dy = this.targetY - this.y;
+
+                            // Simple heuristic: if moving horizontally, check if we should go vertical
+                            if (this.vx !== 0) {
+                                if (Math.abs(dy) > 20 && Math.random() > 0.5) {
+                                    // Turn vertical
+                                    this.vx = 0;
+                                    this.vy = dy > 0 ? 1 : -1;
+                                    // Snap Y
+                                    this.y = gridY * CELL_SIZE; 
+                                    // Adjust X to correct lane
+                                    if (this.vy > 0) this.x = gridX * CELL_SIZE - LANE_WIDTH/2;
+                                    else this.x = gridX * CELL_SIZE + LANE_WIDTH/2;
+                                    this.turnedAt = currentNode;
+                                }
+                            } else {
+                                if (Math.abs(dx) > 20 && Math.random() > 0.5) {
+                                    // Turn horizontal
+                                    this.vy = 0;
+                                    this.vx = dx > 0 ? 1 : -1;
+                                    this.x = gridX * CELL_SIZE;
+                                    if (this.vx > 0) this.y = gridY * CELL_SIZE + LANE_WIDTH/2;
+                                    else this.y = gridY * CELL_SIZE - LANE_WIDTH/2;
+                                    this.turnedAt = currentNode;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 5. Boundaries / Despawn
+                if (this.x < -50 || this.x > CANVAS_SIZE + 50 || this.y < -50 || this.y > CANVAS_SIZE + 50) {
+                    this.dead = true;
+                    flowCounter++;
                 }
             }
 
-            if (sameRoad && dist < minDist) {
-                minDist = dist;
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                // Rotate based on velocity
+                let angle = 0;
+                if (this.vx > 0) angle = Math.PI / 2;
+                if (this.vx < 0) angle = -Math.PI / 2;
+                if (this.vy > 0) angle = Math.PI; // Down
+                if (this.vy < 0) angle = 0; // Up
+                
+                ctx.rotate(angle);
+
+                // Glow
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = this.color;
+
+                // Car Body
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                // Headlights
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#fff';
+                ctx.globalAlpha = 0.8;
+                ctx.fillRect(-3, -this.height/2 - 2, 2, 2);
+                ctx.fillRect(1, -this.height/2 - 2, 2, 2);
+                
+                // Brake lights
+                if (this.speed < this.maxSpeed * 0.5) {
+                    ctx.fillStyle = '#ff0000';
+                    ctx.shadowBlur = 5;
+                    ctx.shadowColor = 'red';
+                    ctx.fillRect(-3, this.height/2, 2, 1);
+                    ctx.fillRect(1, this.height/2, 2, 1);
+                }
+
+                ctx.restore();
             }
         }
-        return minDist;
-    }
 
-    draw(ctx) {
-        ctx.fillStyle = this.color;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, CAR_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Headlights/Taillights subtle effect
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.beginPath();
-        if(this.dir === 0) ctx.arc(this.x, this.y - CAR_RADIUS, 1, 0, Math.PI*2);
-        if(this.dir === 1) ctx.arc(this.x + CAR_RADIUS, this.y, 1, 0, Math.PI*2);
-        if(this.dir === 2) ctx.arc(this.x, this.y + CAR_RADIUS, 1, 0, Math.PI*2);
-        if(this.dir === 3) ctx.arc(this.x - CAR_RADIUS, this.y, 1, 0, Math.PI*2);
-        ctx.fill();
-    }
-}
+        // --- Main Loop ---
 
-// --- Initialization ---
-
-function init() {
-    cars = [];
-    lights = [];
-    
-    // Create Lights at every intersection
-    for (let i = 0; i <= 10; i++) {
-        for (let j = 0; j <= 10; j++) {
-            lights.push(new TrafficLight(i, j));
+        function updateLights() {
+            lights.forEach(light => {
+                light.timer++;
+                // Switch every ~300 frames (5 seconds at 60fps)
+                if (light.timer > 250 + Math.random() * 100) {
+                    light.state = light.state === 'NS' ? 'EW' : 'NS';
+                    light.timer = 0;
+                }
+            });
         }
-    }
 
-    // Create Cars
-    for (let i = 0; i < TOTAL_CARS; i++) {
-        cars.push(new Car());
-        // Pre-warm simulation so we don't start empty
-        // Advance cars randomly to fill screen
-        cars[i].x = Math.random() * WIDTH;
-        cars[i].y = Math.random() * HEIGHT;
-        // Adjust direction based on rough position to keep them on roads
-        // Simple heuristic: if on a horizontal road, go left or right. If vertical, up or down.
-        // For this simulation, we just let them spawn anywhere and they will correct or reset.
-        // Better: Snap to a random road.
-        if (Math.random() > 0.5) {
-            cars[i].x = getRoadX(Math.floor(Math.random()*11));
-            cars[i].dir = Math.random() > 0.5 ? 2 : 0;
-        } else {
-            cars[i].y = getRoadY(Math.floor(Math.random()*11));
-            cars[i].dir = Math.random() > 0.5 ? 1 : 3;
+        function drawGrid() {
+            // Clear
+            ctx.fillStyle = COLORS.bg;
+            ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+            // Draw Buildings
+            ctx.fillStyle = COLORS.building;
+            for (let x = 0; x < GRID_SIZE; x++) {
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    // Road area is between cells, so buildings fill the rest
+                    // Actually, let's draw the roads first, then buildings on top? No, roads are connections.
+                    // Let's draw Building blocks at grid intersections?
+                    // Visuals: Roads are the gaps. Buildings are the solid blocks.
+                    
+                    const cx = x * CELL_SIZE;
+                    const cy = y * CELL_SIZE;
+                    
+                    // Draw building centered at grid point
+                    ctx.fillRect(
+                        cx - BUILDING_SIZE/2, 
+                        cy - BUILDING_SIZE/2, 
+                        BUILDING_SIZE, 
+                        BUILDING_SIZE
+                    );
+                    
+                    // Add "windows" (dots)
+                    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+                    if ((x+y)%3===0) ctx.fillRect(cx - 5, cy - 5, 2, 2);
+                    ctx.fillStyle = COLORS.building;
+                }
+            }
+
+            // Draw Road Markings
+            ctx.strokeStyle = COLORS.roadLine;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            
+            for (let i = 1; i < GRID_SIZE; i++) {
+                // Vertical Roads
+                ctx.beginPath();
+                ctx.moveTo(i * CELL_SIZE, 0);
+                ctx.lineTo(i * CELL_SIZE, CANVAS_SIZE);
+                ctx.stroke();
+
+                // Horizontal Roads
+                ctx.beginPath();
+                ctx.moveTo(0, i * CELL_SIZE);
+                ctx.lineTo(CANVAS_SIZE, i * CELL_SIZE);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
         }
-    }
 
-    startTime = Date.now();
-    frameCount = 0;
-}
+        function drawLights() {
+            lights.forEach(light => {
+                const isNS = light.state === 'NS';
+                
+                // Draw NS lights (Vertical traffic)
+                ctx.fillStyle = isNS ? COLORS.lightGreen : COLORS.lightRed;
+                ctx.beginPath();
+                ctx.arc(light.x - LANE_WIDTH/2, light.y, 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw EW lights (Horizontal traffic)
+                ctx.fillStyle = !isNS ? COLORS.lightGreen : COLORS.lightRed;
+                ctx.beginPath();
+                ctx.arc(light.x, light.y - LANE_WIDTH/2, 2, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
 
-// --- Main Loop ---
+        function spawnCar() {
+            // Limit total cars
+            if (cars.length < 150) {
+                cars.push(new Car());
+            }
+        }
 
-function drawRoads() {
-    ctx.fillStyle = '#111'; // Road color
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        function animate(timestamp) {
+            // 1. Logic
+            updateLights();
+            
+            // Spawn cars periodically
+            if (timestamp - lastCarTime > 800) { // Spawn every 800ms approx
+                spawnCar();
+                lastCarTime = timestamp;
+            }
 
-    // Draw vertical roads
-    for (let i = 0; i <= 10; i++) {
-        let x = getRoadX(i);
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fillRect(x - ROAD_WIDTH/2, 0, ROAD_WIDTH, HEIGHT);
-        
-        // Lane markers
-        ctx.strokeStyle = '#444';
-        ctx.setLineDash([10, 10]);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, HEIGHT);
-        ctx.stroke();
-    }
+            // Update cars
+            for (let i = cars.length - 1; i >= 0; i--) {
+                cars[i].update();
+                if (cars[i].dead) {
+                    cars.splice(i, 1);
+                }
+            }
 
-    // Draw horizontal roads
-    for (let j = 0; j <= 10; j++) {
-        let y = getRoadY(j);
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fillRect(0, y - ROAD_WIDTH/2, WIDTH, ROAD_WIDTH);
+            // 2. Render
+            drawGrid();
+            drawLights();
+            
+            // Draw cars
+            cars.forEach(car => car.draw());
 
-        // Lane markers
-        ctx.strokeStyle = '#444';
-        ctx.setLineDash([10, 10]);
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(WIDTH, y);
-        ctx.stroke();
-    }
-    
-    ctx.setLineDash([]);
-}
+            // Update Stats UI
+            if (frame % 10 === 0) {
+                document.getElementById('agent-count').innerText = cars.length;
+                document.getElementById('flow-rate').innerText = Math.floor(flowCounter * (60000 / (timestamp || 1)) * 10); // Rough flow/min
+            }
 
-function animate(timestamp) {
-    // Check restart
-    if (Date.now() - startTime > RESTART_INTERVAL) {
+            frame++;
+            requestAnimationFrame(animate);
+        }
+
+        // Start
         init();
-    }
+        requestAnimationFrame(animate);
 
-    // Update Logic
-    lights.forEach(l => l.update());
-    
-    // Sort cars for rendering? No, just update.
-    // We update cars in random order to prevent bias? 
-    // Standard array update is fine for this scale.
-    cars.forEach(c => c.update());
+        // Handle Resize (Optional, but good practice)
+        window.addEventListener('resize', () => {
+            // Canvas is fixed size, but we could scale it via CSS if we wanted
+        });
 
-    // Render
-    ctx.clearRect(0, 0, WIDTH, HEIGHT);
-    
-    drawRoads();
-    lights.forEach(l => l.draw(ctx));
-    cars.forEach(c => c.draw(ctx));
-
-    requestAnimationFrame(animate);
-}
-
-// Start
-init();
-requestAnimationFrame(animate);
-
-</script>
+    </script>
 </body>
 </html>

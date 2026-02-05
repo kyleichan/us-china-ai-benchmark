@@ -1,0 +1,651 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=200, height=300, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Stackquake</title>
+<style>
+  html,body{margin:0;padding:0;background:#111;overflow:hidden;}
+  #wrap{width:200px;height:300px;position:relative;background:#0b0f14; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;}
+  canvas{display:block; width:200px;height:300px; image-rendering:pixelated;}
+  #ui{
+    position:absolute; left:0; top:0; width:200px; height:300px; pointer-events:none;
+    color:#d7e2ff; font-size:10px; line-height:1.2; text-shadow:0 1px 0 #000;
+  }
+  #topbar{
+    position:absolute; left:4px; top:4px; right:4px;
+    display:flex; justify-content:space-between; align-items:flex-start; gap:6px;
+  }
+  #hint{
+    max-width:138px; opacity:.9;
+  }
+  #stat{
+    text-align:right; white-space:nowrap; opacity:.9;
+  }
+  #msg{
+    position:absolute; left:0; right:0; top:132px;
+    text-align:center; font-weight:700; font-size:12px;
+    color:#ffe5a8; display:none;
+  }
+  #btn{
+    position:absolute; left:4px; bottom:4px; right:4px;
+    pointer-events:auto;
+    display:flex; gap:6px;
+  }
+  button{
+    flex:1;
+    font-size:10px; padding:6px 6px;
+    border:1px solid #263249; border-radius:6px;
+    background:#101826; color:#d7e2ff;
+  }
+  button:active{transform:translateY(1px);}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="200" height="300"></canvas>
+  <div id="ui">
+    <div id="topbar">
+      <div id="hint">Drag blocks. Stack into a tall stable tower. Mild quake every few seconds.</div>
+      <div id="stat"><span id="height">0</span>px<br><span id="quake">0</span>s</div>
+    </div>
+    <div id="msg"></div>
+    <div id="btn">
+      <button id="reset">Reset</button>
+      <button id="help">How</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const W=200,H=300;
+  const cvs=document.getElementById('c');
+  const ctx=cvs.getContext('2d');
+
+  // Physics constants (tuned for 200x300)
+  const G = 520;           // px/s^2
+  const SUB = 2;           // substeps per frame
+  const ITER = 8;          // position iterations
+  const REST = 0.08;       // restitution
+  const MU = 0.62;         // friction coefficient
+  const DRAG_DAMP = 18;    // dragging spring strength
+
+  // World: only convex polygons, SAT collision
+  let bodies=[], statics=[], blocks=[];
+  let t=0, last=performance.now();
+  let quakeTimer=0, nextQuake=2.4 + Math.random()*2.5;
+  let quakePhase=0, quakeMag=0, quakeDur=0, quakeActive=false;
+
+  const heightEl=document.getElementById('height');
+  const quakeEl=document.getElementById('quake');
+  const msgEl=document.getElementById('msg');
+
+  function v(x=0,y=0){return {x,y};}
+  function add(a,b){return {x:a.x+b.x,y:a.y+b.y};}
+  function sub(a,b){return {x:a.x-b.x,y:a.y-b.y};}
+  function mul(a,s){return {x:a.x*s,y:a.y*s};}
+  function dot(a,b){return a.x*b.x+a.y*b.y;}
+  function len(a){return Math.hypot(a.x,a.y);}
+  function norm(a){const L=len(a)||1; return {x:a.x/L,y:a.y/L};}
+  function perp(a){return {x:-a.y,y:a.x};}
+  function clamp(x,a,b){return Math.max(a,Math.min(b,x));}
+
+  function rotate(p,ang){
+    const c=Math.cos(ang), s=Math.sin(ang);
+    return {x:p.x*c - p.y*s, y:p.x*s + p.y*c};
+  }
+
+  function polyArea(pts){
+    let A=0;
+    for(let i=0;i<pts.length;i++){
+      const p=pts[i], q=pts[(i+1)%pts.length];
+      A += p.x*q.y - p.y*q.x;
+    }
+    return A*0.5;
+  }
+
+  function centroid(pts){
+    let A=0,cx=0,cy=0;
+    for(let i=0;i<pts.length;i++){
+      const p=pts[i], q=pts[(i+1)%pts.length];
+      const cross = p.x*q.y - q.x*p.y;
+      A += cross;
+      cx += (p.x+q.x)*cross;
+      cy += (p.y+q.y)*cross;
+    }
+    A *= 0.5;
+    const f = 1/(6*A || 1);
+    return {x:cx*f,y:cy*f};
+  }
+
+  function makeBody(poly, pos, ang, mass, color, isStatic=false){
+    // Ensure CCW
+    if(polyArea(poly) < 0) poly = poly.slice().reverse();
+    // Recenter vertices around centroid
+    const c = centroid(poly);
+    const verts = poly.map(p => ({x:p.x-c.x, y:p.y-c.y}));
+    const r = verts.reduce((m,p)=>Math.max(m, Math.hypot(p.x,p.y)), 0);
+
+    const invMass = isStatic ? 0 : 1/mass;
+    // Approx moment of inertia using polygon area and radius (rough but stable)
+    const I = isStatic ? 0 : mass * r*r * 0.55;
+    const invI = isStatic ? 0 : 1/I;
+
+    const b = {
+      verts, pos:{x:pos.x,y:pos.y}, ang:ang||0,
+      vel:v(0,0), w:0,
+      invMass, invI,
+      r, color, isStatic,
+      sleep:0, // simple sleep counter
+      id: Math.random().toString(36).slice(2)
+    };
+    return b;
+  }
+
+  function worldVerts(b){
+    const out=[];
+    for(const p of b.verts){
+      const rp=rotate(p,b.ang);
+      out.push({x:rp.x + b.pos.x, y:rp.y + b.pos.y});
+    }
+    return out;
+  }
+
+  function project(axis, pts){
+    let mn=dot(axis,pts[0]), mx=mn;
+    for(let i=1;i<pts.length;i++){
+      const d=dot(axis,pts[i]);
+      if(d<mn) mn=d;
+      if(d>mx) mx=d;
+    }
+    return {mn,mx};
+  }
+
+  function overlap1D(a,b){
+    return Math.min(a.mx,b.mx) - Math.max(a.mn,b.mn);
+  }
+
+  function pointInPoly(pt, poly){
+    // winding / ray cast
+    let inside=false;
+    for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+      const a=poly[i], b=poly[j];
+      const intersect = ((a.y>pt.y)!==(b.y>pt.y)) &&
+        (pt.x < (b.x-a.x)*(pt.y-a.y)/((b.y-a.y)||1e-9) + a.x);
+      if(intersect) inside=!inside;
+    }
+    return inside;
+  }
+
+  function closestPointOnSegment(p,a,b){
+    const ab=sub(b,a);
+    const t=clamp(dot(sub(p,a),ab)/(dot(ab,ab)||1),0,1);
+    return add(a,mul(ab,t));
+  }
+
+  function supportContact(polyA, polyB){
+    // Pick a contact point by taking the vertex of A inside B, else B inside A, else closest between edges.
+    for(const p of polyA) if(pointInPoly(p,polyB)) return p;
+    for(const p of polyB) if(pointInPoly(p,polyA)) return p;
+    // Edge-edge: choose closest endpoints
+    let best=null, bestD=1e9;
+    for(let i=0;i<polyA.length;i++){
+      const a1=polyA[i], a2=polyA[(i+1)%polyA.length];
+      for(let j=0;j<polyB.length;j++){
+        const b1=polyB[j], b2=polyB[(j+1)%polyB.length];
+        const cp1=closestPointOnSegment(a1,b1,b2);
+        const d1=len(sub(a1,cp1));
+        if(d1<bestD){bestD=d1; best=a1;}
+        const cp2=closestPointOnSegment(b1,a1,a2);
+        const d2=len(sub(b1,cp2));
+        if(d2<bestD){bestD=d2; best=b1;}
+      }
+    }
+    return best || polyA[0];
+  }
+
+  function sat(A,B){
+    const aW=worldVerts(A), bW=worldVerts(B);
+    let minO=1e9, minAxis=null, flip=1;
+
+    function testAxes(pts){
+      for(let i=0;i<pts.length;i++){
+        const p=pts[i], q=pts[(i+1)%pts.length];
+        const edge=sub(q,p);
+        const axis=norm(perp(edge));
+        const pa=project(axis,aW), pb=project(axis,bW);
+        const o=overlap1D(pa,pb);
+        if(o<=0) return false;
+        if(o<minO){
+          minO=o; minAxis=axis;
+          // Determine direction from A to B
+          const dir=sub(B.pos,A.pos);
+          flip = (dot(dir,axis) < 0) ? -1 : 1;
+        }
+      }
+      return true;
+    }
+
+    if(!testAxes(aW)) return null;
+    if(!testAxes(bW)) return null;
+
+    const n = mul(minAxis, flip);
+    const contact = supportContact(aW,bW);
+    return {n, depth:minO, contact};
+  }
+
+  function applyImpulse(b, impulse, r){
+    // r: contact vector from COM in world space
+    b.vel.x += impulse.x * b.invMass;
+    b.vel.y += impulse.y * b.invMass;
+    b.w += (r.x*impulse.y - r.y*impulse.x) * b.invI;
+  }
+
+  function step(dt){
+    // earthquake: horizontal base acceleration (mild)
+    let ax = 0;
+    if(quakeActive){
+      quakePhase += dt * (8 + quakeMag*10);
+      const shake = Math.sin(quakePhase)*quakeMag + Math.sin(quakePhase*2.2)*quakeMag*0.45;
+      ax = shake * 120; // px/s^2
+      quakeDur -= dt;
+      if(quakeDur<=0){quakeActive=false; quakeMag=0;}
+    }
+
+    // integrate forces
+    for(const b of bodies){
+      if(b.invMass===0) continue;
+
+      // sleep-ish (wake on movement / drag)
+      b.vel.y += G*dt;
+      b.vel.x += ax*dt;
+
+      // light air damping
+      b.vel.x *= Math.exp(-0.6*dt);
+      b.vel.y *= Math.exp(-0.1*dt);
+      b.w *= Math.exp(-1.0*dt);
+
+      b.pos.x += b.vel.x*dt;
+      b.pos.y += b.vel.y*dt;
+      b.ang += b.w*dt;
+    }
+
+    // collisions (positional correction + velocity impulses)
+    for(let k=0;k<ITER;k++){
+      // broadphase naive (small count)
+      const all = bodies.concat(statics);
+      for(let i=0;i<all.length;i++){
+        for(let j=i+1;j<all.length;j++){
+          const A=all[i], B=all[j];
+          if(A.invMass===0 && B.invMass===0) continue;
+
+          const dx=B.pos.x-A.pos.x, dy=B.pos.y-A.pos.y;
+          const rr=A.r+B.r;
+          if(dx*dx+dy*dy > rr*rr*1.25) continue;
+
+          const col = sat(A,B);
+          if(!col) continue;
+
+          const n=col.n, depth=col.depth;
+
+          // positional correction (split by inverse masses)
+          const imA=A.invMass, imB=B.invMass;
+          const sum=imA+imB || 1;
+          const slop=0.2;
+          const corr = Math.max(0, depth - slop);
+          const percent=0.65;
+
+          const move = mul(n, corr*percent/sum);
+          if(imA>0){A.pos.x -= move.x*imA; A.pos.y -= move.y*imA;}
+          if(imB>0){B.pos.x += move.x*imB; B.pos.y += move.y*imB;}
+
+          // impulse resolution (only on last iteration for stability)
+          if(k!==ITER-1) continue;
+
+          const contact = col.contact;
+          const ra = sub(contact, A.pos);
+          const rb = sub(contact, B.pos);
+
+          const velA = add(A.vel, mul(perp(ra), A.w));
+          const velB = add(B.vel, mul(perp(rb), B.w));
+          const rv = sub(velB, velA);
+
+          const velAlongNormal = dot(rv, n);
+          if(velAlongNormal > 0) continue;
+
+          const raCn = (ra.x*n.y - ra.y*n.x);
+          const rbCn = (rb.x*n.y - rb.y*n.x);
+          const invMassSum = (A.invMass + B.invMass) + (raCn*raCn)*A.invI + (rbCn*rbCn)*B.invI;
+
+          const e = REST;
+          let jn = -(1+e)*velAlongNormal;
+          jn /= (invMassSum || 1);
+          const impulseN = mul(n, jn);
+
+          if(A.invMass>0) applyImpulse(A, mul(impulseN,-1), ra);
+          if(B.invMass>0) applyImpulse(B, impulseN, rb);
+
+          // friction
+          const velA2 = add(A.vel, mul(perp(ra), A.w));
+          const velB2 = add(B.vel, mul(perp(rb), B.w));
+          const rv2 = sub(velB2, velA2);
+
+          let tng = sub(rv2, mul(n, dot(rv2,n)));
+          const tl = len(tng);
+          if(tl>1e-6){
+            tng = mul(tng, 1/tl);
+            const raCt = (ra.x*tng.y - ra.y*tng.x);
+            const rbCt = (rb.x*tng.y - rb.y*tng.x);
+            const invMassSumT = (A.invMass + B.invMass) + (raCt*raCt)*A.invI + (rbCt*rbCt)*B.invI;
+
+            let jt = -dot(rv2, tng) / (invMassSumT || 1);
+            const maxF = MU * jn;
+            jt = clamp(jt, -maxF, maxF);
+            const impulseT = mul(tng, jt);
+
+            if(A.invMass>0) applyImpulse(A, mul(impulseT,-1), ra);
+            if(B.invMass>0) applyImpulse(B, impulseT, rb);
+          }
+        }
+      }
+    }
+
+    // bounds (keep within frame sides)
+    for(const b of bodies){
+      if(b.invMass===0) continue;
+      if(b.pos.x < 6){ b.pos.x=6; b.vel.x*=-0.2; }
+      if(b.pos.x > W-6){ b.pos.x=W-6; b.vel.x*=-0.2; }
+      if(b.pos.y > H+120){ // fell far below: respawn
+        respawn(b);
+      }
+    }
+  }
+
+  function respawn(b){
+    b.pos.x = 20 + Math.random()*160;
+    b.pos.y = 80 + Math.random()*60;
+    b.vel = v(0,0); b.w=0;
+    b.ang = (Math.random()*0.5-0.25);
+  }
+
+  // Dragging
+  let pointerDown=false, dragBody=null, dragLocal=null, dragOffset=null;
+  let pointer=v(0,0);
+
+  function screenToWorld(e){
+    const rect=cvs.getBoundingClientRect();
+    const x = (e.clientX-rect.left) * (W/rect.width);
+    const y = (e.clientY-rect.top) * (H/rect.height);
+    return v(x,y);
+  }
+
+  function pickBody(p){
+    // top-most: iterate blocks reverse
+    for(let i=blocks.length-1;i>=0;i--){
+      const b=blocks[i];
+      const wv=worldVerts(b);
+      if(pointInPoly(p,wv)) return b;
+    }
+    return null;
+  }
+
+  function onDown(e){
+    pointerDown=true;
+    pointer=screenToWorld(e);
+    dragBody=pickBody(pointer);
+    if(dragBody){
+      const invRot = -dragBody.ang;
+      const rel = sub(pointer, dragBody.pos);
+      dragLocal = rotate(rel, invRot);
+      dragOffset = rel;
+      // wake
+      dragBody.vel.x*=0.2; dragBody.vel.y*=0.2; dragBody.w*=0.2;
+    }
+  }
+  function onMove(e){
+    pointer=screenToWorld(e);
+  }
+  function onUp(){
+    pointerDown=false;
+    dragBody=null; dragLocal=null; dragOffset=null;
+  }
+
+  cvs.addEventListener('pointerdown', (e)=>{cvs.setPointerCapture(e.pointerId); onDown(e);});
+  cvs.addEventListener('pointermove', onMove);
+  cvs.addEventListener('pointerup', onUp);
+  cvs.addEventListener('pointercancel', onUp);
+
+  function dragForces(dt){
+    if(!dragBody) return;
+    // Move toward target point at the grabbed local point.
+    const target = pointer;
+    const grabbedWorld = add(dragBody.pos, rotate(dragLocal, dragBody.ang));
+    const err = sub(target, grabbedWorld);
+
+    // spring impulse-ish (force)
+    const force = mul(err, DRAG_DAMP);
+    dragBody.vel.x += force.x * dragBody.invMass * dt;
+    dragBody.vel.y += force.y * dragBody.invMass * dt;
+
+    // torque to reduce rotation while dragging (still allows some)
+    const angErr = Math.atan2(err.y, err.x);
+    dragBody.w += (0 - dragBody.w)*4.5*dt;
+    // small rotational damping
+    dragBody.w *= Math.exp(-3.0*dt);
+  }
+
+  function buildLevel(){
+    bodies=[]; statics=[]; blocks=[];
+    t=0; quakeTimer=0; nextQuake=2.2+Math.random()*2.8;
+    quakeActive=false; quakePhase=0; quakeMag=0; quakeDur=0;
+    msgEl.style.display='none';
+
+    // Ground: a few static shapes
+    const groundY = 264;
+    const floor = makeBody(
+      [{x:-120,y:-10},{x:120,y:-10},{x:120,y:10},{x:-120,y:10}],
+      v(100,groundY), 0, 1, '#1c2a3e', true
+    );
+    statics.push(floor);
+
+    const rampL = makeBody(
+      [{x:-55,y:-8},{x:55,y:-8},{x:55,y:8},{x:-55,y:8}],
+      v(56,groundY-22), -0.35, 1, '#162033', true
+    );
+    statics.push(rampL);
+
+    const rock = makeBody(
+      [{x:-18,y:-10},{x:-4,y:-18},{x:12,y:-14},{x:22,y:0},{x:10,y:16},{x:-10,y:14},{x:-22,y:2}],
+      v(148,groundY-18), 0.22, 1, '#162033', true
+    );
+    statics.push(rock);
+
+    const smallBump = makeBody(
+      [{x:-20,y:-6},{x:20,y:-6},{x:16,y:6},{x:-16,y:6}],
+      v(120,groundY-6), 0.10, 1, '#162033', true
+    );
+    statics.push(smallBump);
+
+    // 10 movable blocks (different shapes/sizes)
+    const palette = ['#7dd3fc','#a7f3d0','#fde68a','#fca5a5','#c4b5fd','#fbcfe8','#93c5fd','#86efac','#fdba74','#f9a8d4'];
+    const polys = [
+      // rectangles / beams / wedges / trapezoids
+      [{x:-14,y:-10},{x:14,y:-10},{x:14,y:10},{x:-14,y:10}],
+      [{x:-20,y:-7},{x:20,y:-7},{x:20,y:7},{x:-20,y:7}],
+      [{x:-10,y:-16},{x:10,y:-16},{x:10,y:16},{x:-10,y:16}],
+      [{x:-26,y:-6},{x:26,y:-6},{x:26,y:6},{x:-26,y:6}],
+      [{x:-16,y:-12},{x:18,y:-10},{x:14,y:12},{x:-20,y:10}],
+      [{x:-18,y:-10},{x:18,y:-10},{x:8,y:12},{x:-8,y:12}], // trapezoid
+      [{x:-16,y:-10},{x:16,y:-10},{x:16,y:10},{x:-16,y:10}],
+      [{x:-14,y:-12},{x:18,y:-8},{x:12,y:14},{x:-18,y:8}],
+      [{x:-22,y:-7},{x:22,y:-7},{x:14,y:9},{x:-14,y:9}],
+      [{x:-12,y:-12},{x:16,y:-12},{x:16,y:12},{x:-12,y:12}],
+    ];
+
+    for(let i=0;i<10;i++){
+      const p = polys[i].map(q=>({x:q.x,y:q.y}));
+      const x = 18 + Math.random()*164;
+      const y = 70 + Math.random()*115;
+      const ang = (Math.random()*0.9-0.45);
+      const size = 1;
+      const mass = 1.6 + (p.length)*0.35 + (Math.random()*0.5);
+      const b = makeBody(p, v(x,y), ang, mass, palette[i%palette.length], false);
+      bodies.push(b); blocks.push(b);
+    }
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+
+    // background
+    ctx.fillStyle='#070a0f';
+    ctx.fillRect(0,0,W,H);
+
+    // subtle grid
+    ctx.globalAlpha=0.15;
+    ctx.strokeStyle='#1a2433';
+    ctx.lineWidth=1;
+    for(let y=0;y<=H;y+=20){
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+    for(let x=0;x<=W;x+=20){
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+
+    // quake indicator
+    if(quakeActive){
+      ctx.globalAlpha=0.12;
+      ctx.fillStyle='#ffd166';
+      ctx.fillRect(0,0,W,18);
+      ctx.globalAlpha=1;
+    }
+
+    function drawBody(b, alpha=1){
+      const pts=worldVerts(b);
+      ctx.globalAlpha=alpha;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x,pts[0].y);
+      for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+      ctx.closePath();
+      ctx.fillStyle=b.color;
+      ctx.fill();
+
+      ctx.strokeStyle = b.isStatic ? '#0d1320' : '#0b1220';
+      ctx.lineWidth=1;
+      ctx.stroke();
+
+      // edge highlight
+      ctx.globalAlpha=alpha*0.35;
+      ctx.strokeStyle='#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x,pts[0].y);
+      for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.globalAlpha=1;
+    }
+
+    for(const s of statics) drawBody(s,1);
+    for(const b of bodies) drawBody(b,1);
+
+    // pointer / grab line
+    if(dragBody){
+      const grabbedWorld = add(dragBody.pos, rotate(dragLocal, dragBody.ang));
+      ctx.strokeStyle='#d7e2ff';
+      ctx.globalAlpha=0.6;
+      ctx.beginPath();
+      ctx.moveTo(pointer.x,pointer.y);
+      ctx.lineTo(grabbedWorld.x,grabbedWorld.y);
+      ctx.stroke();
+      ctx.globalAlpha=1;
+      ctx.fillStyle='#d7e2ff';
+      ctx.beginPath(); ctx.arc(pointer.x,pointer.y,2,0,Math.PI*2); ctx.fill();
+    }
+
+    // goal line (suggested)
+    ctx.globalAlpha=0.18;
+    ctx.strokeStyle='#a7f3d0';
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(0,70); ctx.lineTo(W,70); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha=1;
+  }
+
+  function computeTowerHeight(){
+    // height above ground top (groundY-10 is top-ish of floor)
+    let top=H;
+    for(const b of blocks){
+      const pts=worldVerts(b);
+      for(const p of pts) top=Math.min(top,p.y);
+    }
+    const h = Math.max(0, (264-10) - top);
+    return Math.round(h);
+  }
+
+  function checkWin(){
+    const h=computeTowerHeight();
+    heightEl.textContent = h;
+    // win if tall and stable-ish (low velocities) for a moment
+    const tall = h >= 155; // nearly to top
+    let speed=0;
+    for(const b of blocks) speed += len(b.vel) + Math.abs(b.w)*14;
+    const stable = speed/blocks.length < 35;
+
+    if(tall && stable){
+      msgEl.textContent = "Stable tower!";
+      msgEl.style.display='block';
+    } else if(msgEl.style.display==='block'){
+      msgEl.style.display='none';
+    }
+  }
+
+  function maybeQuake(dt){
+    quakeTimer += dt;
+    const remain = Math.max(0, nextQuake - quakeTimer);
+    quakeEl.textContent = remain.toFixed(1);
+
+    if(quakeTimer >= nextQuake){
+      quakeTimer = 0;
+      nextQuake = 2.2 + Math.random()*3.0;
+      quakeActive = true;
+      quakePhase = 0;
+      quakeMag = 0.6 + Math.random()*0.55; // mild
+      quakeDur = 0.55 + Math.random()*0.35;
+    }
+  }
+
+  function frame(now){
+    const dt0 = Math.min(0.033, (now-last)/1000);
+    last=now;
+    t += dt0;
+
+    for(let s=0;s<SUB;s++){
+      const dt = dt0/SUB;
+      dragForces(dt);
+      step(dt);
+      maybeQuake(dt);
+    }
+    checkWin();
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  // UI
+  document.getElementById('reset').onclick = buildLevel;
+  document.getElementById('help').onclick = () => {
+    const showing = msgEl.style.display==='block' && msgEl.textContent.includes('Drag');
+    msgEl.textContent = showing
+      ? " "
+      : "Drag blocks to stack. Wider bases help. Quakes push sideways.";
+    msgEl.style.display = showing ? 'none' : 'block';
+    if(!showing) setTimeout(()=>{ if(msgEl.textContent.includes('Drag')) msgEl.style.display='none'; }, 2200);
+  };
+
+  buildLevel();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

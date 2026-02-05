@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
+<canvas id="canvas" width="250" height="400"></canvas>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const centerX = canvas.width / 2;
+const centerY = canvas.height / 2;
+const sizes = [40, 70, 100];
+const rotations = [0, 0, 0];
+const rotationSpeeds = [0.02, -0.015, 0.01];
+const gaps = [0, Math.PI/3, 2*Math.PI/3];
+
+let balls = [];
+let ballId = 0;
+
+class Ball {
+  constructor() {
+    this.id = ballId++;
+    this.x = centerX;
+    this.y = centerY;
+    this.vx = (Math.random() - 0.5) * 4;
+    this.vy = (Math.random() - 0.5) * 4;
+    this.radius = 3;
+    this.color = `hsl(${Math.random() * 360}, 80%, 60%)`;
+    this.gravity = 0.1;
+    this.friction = 0.98;
+    this.bounce = 0.8;
+    this.active = true;
+  }
+
+  update() {
+    if (!this.active) return;
+    
+    this.vy += this.gravity;
+    this.vx *= this.friction;
+    this.vy *= this.friction;
+    
+    this.x += this.vx;
+    this.y += this.vy;
+    
+    for (let i = 0; i < 3; i++) {
+      const size = sizes[i];
+      const gapStart = gaps[i] + rotations[i];
+      const gapEnd = gapStart + Math.PI/3;
+      
+      for (let j = 0; j < 6; j++) {
+        if (j === Math.floor(gapStart/(Math.PI/3)) % 6) continue;
+        
+        const angle1 = j * Math.PI/3 + rotations[i];
+        const angle2 = (j+1) * Math.PI/3 + rotations[i];
+        
+        const x1 = centerX + Math.cos(angle1) * size;
+        const y1 = centerY + Math.sin(angle1) * size;
+        const x2 = centerX + Math.cos(angle2) * size;
+        const y2 = centerY + Math.sin(angle2) * size;
+        
+        const collision = this.checkLineCollision(x1, y1, x2, y2);
+        if (collision) {
+          this.x = collision.x;
+          this.y = collision.y;
+          const normal = collision.normal;
+          const dot = this.vx * normal.x + this.vy * normal.y;
+          this.vx -= 2 * dot * normal.x * this.bounce;
+          this.vy -= 2 * dot * normal.y * this.bounce;
+        }
+      }
+    }
+    
+    if (Math.sqrt((this.x - centerX)**2 + (this.y - centerY)**2) > sizes[2] + 10) {
+      this.active = false;
+    }
+  }
+
+  checkLineCollision(x1, y1, x2, y2) {
+    const A = this.x - x1;
+    const B = this.y - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+    
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+    if (lenSq !== 0) param = dot / lenSq;
+    
+    let xx, yy;
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+    
+    const dx = this.x - xx;
+    const dy = this.y - yy;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    if (distance < this.radius) {
+      const normal = { x: dx/distance, y: dy/distance };
+      return {
+        x: xx + normal.x * this.radius,
+        y: yy + normal.y * this.radius,
+        normal: normal
+      };
+    }
+    return null;
+  }
+
+  draw() {
+    if (!this.active) return;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+  }
+}
+
+function drawHexagon(size, rotation, gapStart) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = i * Math.PI/3 + rotation;
+    const nextAngle = (i+1) * Math.PI/3 + rotation;
+    
+    if (Math.abs(angle - gapStart) < 0.01 || 
+        Math.abs(angle - (gapStart + Math.PI*2)) < 0.01) {
+      continue;
+    }
+    
+    const x1 = centerX + Math.cos(angle) * size;
+    const y1 = centerY + Math.sin(angle) * size;
+    const x2 = centerX + Math.cos(nextAngle) * size;
+    const y2 = centerY + Math.sin(nextAngle) * size;
+    
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+function animate() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  for (let i = 0; i < 3; i++) {
+    rotations[i] += rotationSpeeds[i];
+    drawHexagon(sizes[i], rotations[i], gaps[i] + rotations[i]);
+  }
+  
+  balls = balls.filter(ball => ball.active);
+  
+  balls.forEach(ball => {
+    ball.update();
+    ball.draw();
+  });
+  
+  if (Math.random() < 0.1) {
+    balls.push(new Ball());
+  }
+  
+  requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>

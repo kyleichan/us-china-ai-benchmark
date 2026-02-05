@@ -2,24 +2,24 @@
   "flow": {
     "gemini": {
       "usage": {
-        "promptTokenCount": 211,
-        "candidatesTokenCount": 2452,
-        "totalTokenCount": 4654,
+        "promptTokenCount": 148,
+        "candidatesTokenCount": 1290,
+        "totalTokenCount": 3920,
         "promptTokensDetails": [
           {
             "modality": "TEXT",
-            "tokenCount": 211
+            "tokenCount": 148
           }
         ],
-        "thoughtsTokenCount": 1991
+        "thoughtsTokenCount": 2482
       },
-      "time_seconds": 44.2
+      "time_seconds": 34.9
     },
     "gpt": {
       "usage": {
-        "prompt_tokens": 193,
-        "completion_tokens": 2590,
-        "total_tokens": 2783,
+        "prompt_tokens": 143,
+        "completion_tokens": 1564,
+        "total_tokens": 1707,
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "audio_tokens": 0
@@ -31,39 +31,47 @@
           "rejected_prediction_tokens": 0
         }
       },
-      "time_seconds": 43.9
+      "time_seconds": 24.4
     },
     "deepseek": {
       "usage": {
-        "prompt_tokens": 199,
-        "completion_tokens": 6618,
-        "total_tokens": 6817,
+        "prompt_tokens": 141,
+        "completion_tokens": 1266,
+        "total_tokens": 1407,
         "prompt_tokens_details": {
-          "cached_tokens": 0
+          "cached_tokens": 64
         },
-        "completion_tokens_details": {
-          "reasoning_tokens": 4529
-        },
-        "prompt_cache_hit_tokens": 0,
-        "prompt_cache_miss_tokens": 199
+        "prompt_cache_hit_tokens": 64,
+        "prompt_cache_miss_tokens": 77
       },
-      "time_seconds": 187.8
+      "time_seconds": 35.6
     },
     "kimi": {
       "usage": {
-        "prompt_tokens": 192,
-        "completion_tokens": 2998,
-        "total_tokens": 3190
+        "prompt_tokens": 146,
+        "completion_tokens": 4718,
+        "total_tokens": 4864
       },
-      "time_seconds": 61.1
+      "time_seconds": 89.3
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 158,
+        "completion_tokens": 865,
+        "total_tokens": 1023,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 11.3
     }
   },
   "traffic": {
     "gpt": {
       "usage": {
-        "prompt_tokens": 165,
-        "completion_tokens": 5869,
-        "total_tokens": 6034,
+        "prompt_tokens": 118,
+        "completion_tokens": 3588,
+        "total_tokens": 3706,
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "audio_tokens": 0
@@ -75,54 +83,62 @@
           "rejected_prediction_tokens": 0
         }
       },
-      "time_seconds": 105.6
+      "time_seconds": 75.2
     },
     "gemini": {
       "usage": {
-        "promptTokenCount": 187,
-        "candidatesTokenCount": 4205,
-        "totalTokenCount": 7360,
+        "promptTokenCount": 127,
+        "candidatesTokenCount": 3069,
+        "totalTokenCount": 6775,
         "promptTokensDetails": [
           {
             "modality": "TEXT",
-            "tokenCount": 187
+            "tokenCount": 127
           }
         ],
-        "thoughtsTokenCount": 2968
+        "thoughtsTokenCount": 3579
       },
-      "time_seconds": 69.3
+      "time_seconds": 67.9
     },
     "deepseek": {
       "usage": {
-        "prompt_tokens": 174,
-        "completion_tokens": 10257,
-        "total_tokens": 10431,
+        "prompt_tokens": 119,
+        "completion_tokens": 2616,
+        "total_tokens": 2735,
         "prompt_tokens_details": {
           "cached_tokens": 0
         },
-        "completion_tokens_details": {
-          "reasoning_tokens": 4169
-        },
         "prompt_cache_hit_tokens": 0,
-        "prompt_cache_miss_tokens": 174
+        "prompt_cache_miss_tokens": 119
       },
-      "time_seconds": 282.5
+      "time_seconds": 71.7
     },
     "kimi": {
       "usage": {
-        "prompt_tokens": 165,
-        "completion_tokens": 4612,
-        "total_tokens": 4777
+        "prompt_tokens": 122,
+        "completion_tokens": 5703,
+        "total_tokens": 5825
       },
-      "time_seconds": 80.2
+      "time_seconds": 110.0
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 132,
+        "completion_tokens": 1837,
+        "total_tokens": 1969,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 23.5
     }
   },
   "hexagon": {
     "gpt": {
       "usage": {
-        "prompt_tokens": 147,
-        "completion_tokens": 3290,
-        "total_tokens": 3437,
+        "prompt_tokens": 89,
+        "completion_tokens": 2932,
+        "total_tokens": 3021,
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "audio_tokens": 0
@@ -134,54 +150,62 @@
           "rejected_prediction_tokens": 0
         }
       },
-      "time_seconds": 44.3
+      "time_seconds": 49.1
     },
     "gemini": {
       "usage": {
-        "promptTokenCount": 159,
-        "candidatesTokenCount": 2081,
-        "totalTokenCount": 4477,
+        "promptTokenCount": 86,
+        "candidatesTokenCount": 1959,
+        "totalTokenCount": 3784,
         "promptTokensDetails": [
           {
             "modality": "TEXT",
-            "tokenCount": 159
+            "tokenCount": 86
           }
         ],
-        "thoughtsTokenCount": 2237
+        "thoughtsTokenCount": 1739
       },
-      "time_seconds": 42.8
+      "time_seconds": 44.0
     },
     "deepseek": {
       "usage": {
-        "prompt_tokens": 156,
-        "completion_tokens": 2508,
-        "total_tokens": 2664,
+        "prompt_tokens": 89,
+        "completion_tokens": 1611,
+        "total_tokens": 1700,
         "prompt_tokens_details": {
-          "cached_tokens": 128
+          "cached_tokens": 0
         },
-        "completion_tokens_details": {
-          "reasoning_tokens": 627
-        },
-        "prompt_cache_hit_tokens": 128,
-        "prompt_cache_miss_tokens": 28
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 89
       },
-      "time_seconds": 71.6
+      "time_seconds": 50.0
     },
     "kimi": {
       "usage": {
-        "prompt_tokens": 147,
-        "completion_tokens": 2353,
-        "total_tokens": 2500
+        "prompt_tokens": 90,
+        "completion_tokens": 3905,
+        "total_tokens": 3995
       },
-      "time_seconds": 43.0
+      "time_seconds": 80.9
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 114,
+        "completion_tokens": 1338,
+        "total_tokens": 1452,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 18.5
     }
   },
   "pendulum": {
     "gpt": {
       "usage": {
-        "prompt_tokens": 178,
-        "completion_tokens": 2253,
-        "total_tokens": 2431,
+        "prompt_tokens": 140,
+        "completion_tokens": 1976,
+        "total_tokens": 2116,
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "audio_tokens": 0
@@ -193,46 +217,188 @@
           "rejected_prediction_tokens": 0
         }
       },
-      "time_seconds": 35.5
+      "time_seconds": 42.1
     },
     "gemini": {
       "usage": {
-        "promptTokenCount": 194,
-        "candidatesTokenCount": 2454,
-        "totalTokenCount": 5117,
+        "promptTokenCount": 143,
+        "candidatesTokenCount": 1812,
+        "totalTokenCount": 7037,
         "promptTokensDetails": [
           {
             "modality": "TEXT",
-            "tokenCount": 194
+            "tokenCount": 143
           }
         ],
-        "thoughtsTokenCount": 2469
+        "thoughtsTokenCount": 5082
       },
-      "time_seconds": 48.4
+      "time_seconds": 60.0
     },
     "deepseek": {
       "usage": {
-        "prompt_tokens": 185,
-        "completion_tokens": 3466,
-        "total_tokens": 3651,
+        "prompt_tokens": 138,
+        "completion_tokens": 1323,
+        "total_tokens": 1461,
         "prompt_tokens_details": {
-          "cached_tokens": 128
+          "cached_tokens": 64
         },
-        "completion_tokens_details": {
-          "reasoning_tokens": 1791
-        },
-        "prompt_cache_hit_tokens": 128,
-        "prompt_cache_miss_tokens": 57
+        "prompt_cache_hit_tokens": 64,
+        "prompt_cache_miss_tokens": 74
       },
-      "time_seconds": 98.8
+      "time_seconds": 37.3
     },
     "kimi": {
       "usage": {
-        "prompt_tokens": 177,
-        "completion_tokens": 2846,
-        "total_tokens": 3023
+        "prompt_tokens": 140,
+        "completion_tokens": 4416,
+        "total_tokens": 4556
       },
-      "time_seconds": 51.8
+      "time_seconds": 107.1
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 153,
+        "completion_tokens": 1735,
+        "total_tokens": 1888,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 21.8
+    }
+  },
+  "minesweeper": {
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 36,
+        "completion_tokens": 5690,
+        "total_tokens": 5726,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 99.4
+    },
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 38,
+        "candidatesTokenCount": 3379,
+        "totalTokenCount": 5423,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 38
+          }
+        ],
+        "thoughtsTokenCount": 2006
+      },
+      "time_seconds": 48.5
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 40,
+        "completion_tokens": 2681,
+        "total_tokens": 2721,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 40
+      },
+      "time_seconds": 86.6
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 37,
+        "completion_tokens": 6719,
+        "total_tokens": 6756
+      },
+      "time_seconds": 76.7
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 108,
+        "completion_tokens": 1668,
+        "total_tokens": 1776,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 15.0
+    }
+  },
+  "blocks": {
+    "gpt": {
+      "usage": {
+        "prompt_tokens": 83,
+        "completion_tokens": 6420,
+        "total_tokens": 6503,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "audio_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "audio_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
+        }
+      },
+      "time_seconds": 127.1
+    },
+    "gemini": {
+      "usage": {
+        "promptTokenCount": 88,
+        "candidatesTokenCount": 1643,
+        "totalTokenCount": 4205,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 88
+          }
+        ],
+        "thoughtsTokenCount": 2474
+      },
+      "time_seconds": 46.4
+    },
+    "deepseek": {
+      "usage": {
+        "prompt_tokens": 83,
+        "completion_tokens": 2069,
+        "total_tokens": 2152,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 83
+      },
+      "time_seconds": 65.0
+    },
+    "kimi": {
+      "usage": {
+        "prompt_tokens": 84,
+        "completion_tokens": 6107,
+        "total_tokens": 6191
+      },
+      "time_seconds": 129.2
+    },
+    "qwen": {
+      "usage": {
+        "prompt_tokens": 92,
+        "completion_tokens": 1118,
+        "total_tokens": 1210,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "time_seconds": 9.0
     }
   }
 }
