@@ -1,118 +1,112 @@
 <!DOCTYPE html>
-<html>
-<body>
-<canvas id="pendulum" width="250" height="400" style="background:#000;"></canvas>
+<canvas id="pendulum" width="250" height="400"></canvas>
 <script>
 const canvas = document.getElementById('pendulum');
 const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
-
-let t = 0, dt = 1/60;
-let state = [Math.PI*0.99, Math.PI*0.95, 0, 0];
-let trail = [];
-let lastPush = 0;
-
-const l1 = 80, l2 = 80;
-const m1 = 5.0, m2 = 3.0;
+const scale = 70;
+const pivotX = 125, pivotY = 100;
 const g = 9.81;
-const pivot = {x: W/2, y: 80};
-const trailLength = 200;
+const l1 = 1.0, l2 = 0.8;
+const m1 = 1.0, m2 = 0.8;
+let theta1 = Math.PI - 0.1, theta2 = Math.PI - 0.2;
+let omega1 = 0, omega2 = 0;
+let trail = [];
+const trailLength = 300;
+let lastTime = 0;
+let pushTimer = 0;
 
-function deriv(state) {
-    const [th1, th2, w1, w2] = state;
-    const cos12 = Math.cos(th1 - th2);
-    const sin12 = Math.sin(th1 - th2);
-    const den = m1 + m2*sin12*sin12;
-    const a1 = (m2*g*Math.sin(th2)*cos12 - m2*l2*w2*w2*sin12 - (m1+m2)*g*Math.sin(th1)) / (l1*den);
-    const a2 = ((m1+m2)*(g*Math.sin(th1)*cos12 + l1*w1*w1*sin12 - g*Math.sin(th2))) / (l2*den);
+function derivs(t1, t2, w1, w2) {
+    const c = Math.cos(t1 - t2);
+    const s = Math.sin(t1 - t2);
+    const denom = m1 + m2 * s * s;
+    const a1num = -g * (m1 + m2) * Math.sin(t1) - m2 * g * Math.sin(t1 - 2 * t2)
+                  - 2 * s * m2 * (w2 * w2 * l2 + w1 * w1 * l1 * c);
+    const a2num = 2 * s * (w1 * w1 * l1 * (m1 + m2) + g * (m1 + m2) * Math.cos(t1)
+                  + w2 * w2 * l2 * m2 * c);
+    const a1 = a1num / (l1 * denom);
+    const a2 = a2num / (l2 * denom);
     return [w1, w2, a1, a2];
 }
 
-function rk4(state, dt) {
-    const k1 = deriv(state);
-    const k2 = deriv(state.map((s,i) => s + dt/2*k1[i]));
-    const k3 = deriv(state.map((s,i) => s + dt/2*k2[i]));
-    const k4 = deriv(state.map((s,i) => s + dt*k3[i]));
-    return state.map((s,i) => s + dt/6*(k1[i] + 2*k2[i] + 2*k3[i] + k4[i]));
+function rk4Step(dt) {
+    let k1 = derivs(theta1, theta2, omega1, omega2);
+    let k2 = derivs(theta1 + dt * k1[0] / 2, theta2 + dt * k1[1] / 2,
+                    omega1 + dt * k1[2] / 2, omega2 + dt * k1[3] / 2);
+    let k3 = derivs(theta1 + dt * k2[0] / 2, theta2 + dt * k2[1] / 2,
+                    omega1 + dt * k2[2] / 2, omega2 + dt * k2[3] / 2);
+    let k4 = derivs(theta1 + dt * k3[0], theta2 + dt * k3[1],
+                    omega1 + dt * k3[2], omega2 + dt * k3[3]);
+    theta1 += dt * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]) / 6;
+    theta2 += dt * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]) / 6;
+    omega1 += dt * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]) / 6;
+    omega2 += dt * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]) / 6;
 }
 
-function push() {
-    state[2] += 25;
-    state[3] += -15;
-}
-
-function update() {
-    t += dt;
-    if (t - lastPush > 10) {
-        push();
-        lastPush = t;
-    }
-    state = rk4(state, dt);
+function drawPendulum() {
+    const x1 = pivotX + l1 * scale * Math.sin(theta1);
+    const y1 = pivotY + l1 * scale * Math.cos(theta1);
+    const x2 = x1 + l2 * scale * Math.sin(theta2);
+    const y2 = y1 + l2 * scale * Math.cos(theta2);
     
-    const [th1, th2, w1, w2] = state;
-    const x1 = pivot.x + l1*Math.sin(th1);
-    const y1 = pivot.y + l1*Math.cos(th1);
-    const x2 = x1 + l2*Math.sin(th2);
-    const y2 = y1 + l2*Math.cos(th2);
-    
-    trail.push({x: x2, y: y2, w: w2});
+    trail.push({x: x2, y: y2, w: omega2});
     if (trail.length > trailLength) trail.shift();
-}
-
-function draw() {
-    ctx.clearRect(0, 0, W, H);
     
-    const [th1, th2] = state;
-    const x1 = pivot.x + l1*Math.sin(th1);
-    const y1 = pivot.y + l1*Math.cos(th1);
-    const x2 = x1 + l2*Math.sin(th2);
-    const y2 = y1 + l2*Math.cos(th2);
-    
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.beginPath();
     for (let i = 0; i < trail.length; i++) {
         const p = trail[i];
-        const hue = 240 + Math.min(120, Math.max(-120, p.w*5));
-        ctx.strokeStyle = `hsl(${hue},100%,50%)`;
+        const alpha = i / trail.length;
+        const hue = 240 - Math.min(180, Math.abs(p.w) * 12);
+        ctx.strokeStyle = `hsl(${hue}, 100%, 50%, ${alpha})`;
         ctx.lineWidth = 2;
         if (i === 0) ctx.moveTo(p.x, p.y);
-        else {
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-        }
+        else ctx.lineTo(p.x, p.y);
+        ctx.stroke();
     }
     
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(pivot.x, pivot.y);
+    ctx.moveTo(pivotX, pivotY);
     ctx.lineTo(x1, y1);
+    ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
     
-    ctx.fillStyle = '#0af';
+    ctx.fillStyle = '#444';
     ctx.beginPath();
-    ctx.arc(x1, y1, m1, 0, Math.PI*2);
+    ctx.arc(x1, y1, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x2, y2, 10, 0, Math.PI * 2);
     ctx.fill();
     
-    ctx.fillStyle = '#f0a';
+    ctx.fillStyle = '#222';
     ctx.beginPath();
-    ctx.arc(x2, y2, m2, 0, Math.PI*2);
-    ctx.fill();
-    
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(pivot.x, pivot.y, 3, 0, Math.PI*2);
+    ctx.arc(pivotX, pivotY, 6, 0, Math.PI * 2);
     ctx.fill();
 }
 
-function animate() {
-    update();
-    draw();
+function animate(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = (timestamp - lastTime) / 1000;
+    lastTime = timestamp;
+    
+    pushTimer += dt;
+    if (pushTimer > 10) {
+        omega1 += 8.0;
+        pushTimer = 0;
+    }
+    
+    const substeps = 4;
+    const stepDt = dt / substeps;
+    for (let i = 0; i < substeps; i++) {
+        rk4Step(stepDt);
+    }
+    
+    drawPendulum();
     requestAnimationFrame(animate);
 }
-animate();
+
+requestAnimationFrame(animate);
 </script>
-</body>
-</html>

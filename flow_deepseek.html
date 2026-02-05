@@ -1,4 +1,10 @@
-```html
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
+</head>
+<body>
 <canvas id="canvas" width="250" height="400"></canvas>
 <script>
 const canvas = document.getElementById('canvas');
@@ -7,115 +13,117 @@ const seed = 42;
 const particles = [];
 const count = 2000;
 const speed = 1.2;
-const trailAlpha = 0.03;
-const noiseScale = 0.005;
-const curlScale = 0.8;
+const trailDecay = 0.015;
 let time = 0;
 
-class Particle {
-    constructor() {
-        this.x = Math.random() * 250;
-        this.y = Math.random() * 400;
-        this.vx = 0;
-        this.vy = 0;
-    }
-    update() {
-        const angle = noise(this.x * noiseScale, this.y * noiseScale, time) * Math.PI * 4;
-        const curl = curlNoise(this.x * noiseScale, this.y * noiseScale, time) * curlScale;
-        this.vx = Math.cos(angle + curl) * speed;
-        this.vy = Math.sin(angle + curl) * speed;
-        this.x += this.vx;
-        this.y += this.vy;
-        if (this.x < 0) this.x += 250;
-        if (this.x > 250) this.x -= 250;
-        if (this.y < 0) this.y += 400;
-        if (this.y > 400) this.y -= 400;
-    }
-    draw() {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, 0.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.fill();
-    }
-}
-
 function seededRandom(seed) {
-    let t = seed += 0x6D2B79F5;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    let value = seed;
+    return function() {
+        value = (value * 9301 + 49297) % 233280;
+        return value / 233280;
+    };
 }
 
-let rng = seededRandom(seed);
-function rand() { return rng = (rng * 9301 + 49297) % 233280; }
-
-function grad(hash, x, y) {
-    const h = hash & 7;
-    const u = h < 4 ? x : y;
-    const v = h < 4 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -2 * v : 2 * v);
-}
-
-function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-function lerp(a, b, t) { return a + t * (b - a); }
-
+const rng = seededRandom(seed);
 const perm = new Array(512);
 for (let i = 0; i < 256; i++) perm[i] = i;
-for (let i = 255; i > 0; i--) {
-    const j = Math.floor(rand() % (i + 1));
+for (let i = 0; i < 256; i++) {
+    const j = Math.floor(rng() * (i + 1));
     [perm[i], perm[j]] = [perm[j], perm[i]];
 }
 for (let i = 256; i < 512; i++) perm[i] = perm[i - 256];
 
-function noise(x, y, z) {
-    const X = Math.floor(x) & 255;
-    const Y = Math.floor(y) & 255;
-    const Z = Math.floor(z) & 255;
-    x -= Math.floor(x);
-    y -= Math.floor(y);
-    z -= Math.floor(z);
-    const u = fade(x);
-    const v = fade(y);
-    const w = fade(z);
-    const A = perm[X] + Y;
-    const AA = perm[A] + Z;
-    const AB = perm[A + 1] + Z;
-    const B = perm[X + 1] + Y;
-    const BA = perm[B] + Z;
-    const BB = perm[B + 1] + Z;
+function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a, b, t) { return a + t * (b - a); }
+function grad(hash, x, y) {
+    const h = hash & 7;
+    const u = h < 4 ? x : y;
+    const v = h < 4 ? y : x;
+    return ((h & 1) ? -u : u) + ((h & 2) ? -2.0 * v : 2.0 * v);
+}
+
+function perlin(x, y, z = 0) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+    x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+    const u = fade(x), v = fade(y), w = fade(z);
+    const a = perm[X] + Y, aa = perm[a] + Z, ab = perm[a + 1] + Z;
+    const b = perm[X + 1] + Y, ba = perm[b] + Z, bb = perm[b + 1] + Z;
     return lerp(
         lerp(
-            lerp(grad(perm[AA], x, y, z), grad(perm[BA], x - 1, y, z), u),
-            lerp(grad(perm[AB], x, y - 1, z), grad(perm[BB], x - 1, y - 1, z), u),
+            lerp(grad(perm[aa], x, y), grad(perm[ba], x - 1, y), u),
+            lerp(grad(perm[ab], x, y - 1), grad(perm[bb], x - 1, y - 1), u),
             v),
         lerp(
-            lerp(grad(perm[AA + 1], x, y, z - 1), grad(perm[BA + 1], x - 1, y, z - 1), u),
-            lerp(grad(perm[AB + 1], x, y - 1, z - 1), grad(perm[BB + 1], x - 1, y - 1, z - 1), u),
+            lerp(grad(perm[aa + 1], x, y, z - 1), grad(perm[ba + 1], x - 1, y, z - 1), u),
+            lerp(grad(perm[ab + 1], x, y - 1, z - 1), grad(perm[bb + 1], x - 1, y - 1, z - 1), u),
             v),
         w);
 }
 
 function curlNoise(x, y, t) {
-    const eps = 0.001;
-    const n1 = noise(x + eps, y, t);
-    const n2 = noise(x - eps, y, t);
-    const n3 = noise(x, y + eps, t);
-    const n4 = noise(x, y - eps, t);
-    return (n1 - n2 - n3 + n4) / (2 * eps);
+    const e = 0.01;
+    const dx1 = perlin(x + e, y, t) - perlin(x - e, y, t);
+    const dx2 = perlin(x, y + e, t) - perlin(x, y - e, t);
+    const dy1 = perlin(x, y + e, t + 100) - perlin(x, y - e, t + 100);
+    const dy2 = perlin(x + e, y, t + 100) - perlin(x - e, y, t + 100);
+    const curlX = dy1 - dx2;
+    const curlY = dx1 - dy2;
+    return { x: curlX, y: curlY };
 }
 
-for (let i = 0; i < count; i++) particles.push(new Particle());
+function getVelocity(x, y, t) {
+    const scale = 0.005;
+    const curl = curlNoise(x * scale, y * scale, t * 0.1);
+    const tx = t * 0.05;
+    const base = perlin(x * scale * 1.3 + tx, y * scale * 1.3, seed);
+    const vx = Math.cos(base * 6.283) + curl.x * 2.5;
+    const vy = Math.sin(base * 6.283) + curl.y * 2.5;
+    const len = Math.sqrt(vx * vx + vy * vy);
+    return len > 0 ? { x: (vx / len) * speed, y: (vy / len) * speed } : { x: 0, y: 0 };
+}
+
+for (let i = 0; i < count; i++) {
+    particles.push({
+        x: rng() * canvas.width,
+        y: rng() * canvas.height,
+        vx: 0,
+        vy: 0,
+        px: 0,
+        py: 0,
+        hue: rng() * 60 + 200
+    });
+}
 
 function animate() {
-    ctx.fillStyle = `rgba(0,0,0,${trailAlpha})`;
-    ctx.fillRect(0, 0, 250, 400);
-    time += 0.005;
+    ctx.fillStyle = `rgba(5, 5, 15, ${trailDecay})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    time += 0.016;
+
     for (const p of particles) {
-        p.update();
-        p.draw();
+        p.px = p.x;
+        p.py = p.y;
+        const vel = getVelocity(p.x, p.y, time);
+        p.vx = vel.x;
+        p.vy = vel.y;
+        p.x += p.vx;
+        p.y += p.vy;
+
+        if (p.x < 0) p.x += canvas.width;
+        if (p.x > canvas.width) p.x -= canvas.width;
+        if (p.y < 0) p.y += canvas.height;
+        if (p.y > canvas.height) p.y -= canvas.height;
+
+        ctx.beginPath();
+        ctx.moveTo(p.px, p.py);
+        ctx.lineTo(p.x, p.y);
+        ctx.strokeStyle = `hsla(${p.hue}, 80%, 65%, 0.7)`;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
     }
+
     requestAnimationFrame(animate);
 }
 animate();
 </script>
-```
+</body>
+</html>

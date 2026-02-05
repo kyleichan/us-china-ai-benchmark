@@ -1,199 +1,145 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            background: #111;
-        }
-        canvas {
-            border: 1px solid #333;
-            background: #000;
-        }
-    </style>
+<meta charset="UTF-8">
+<style>* { margin: 0; padding: 0; } body { background: #0a0a14; overflow: hidden; } canvas { display: block; }</style>
 </head>
 <body>
-    <canvas id="canvas" width="250" height="400"></canvas>
-    <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
+<canvas id="c" width="250" height="400"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const balls = [];
+let hexagons = [];
 
-        const hexagons = [];
-        const balls = [];
-        const colors = ['#ff5555', '#55ff55', '#5555ff', '#ffff55', '#ff55ff', '#55ffff'];
-        let ballId = 0;
-        let lastBallTime = 0;
+function createHexagon(radius, lineWidth, color) {
+    const sides = 6;
+    const points = [];
+    const rotation = Math.PI / 6;
+    for (let i = 0; i < sides; i++) {
+        if (i === 2) continue;
+        const angle = i * (2 * Math.PI / sides) + rotation;
+        points.push({
+            x: 125 + radius * Math.cos(angle),
+            y: 200 + radius * Math.sin(angle)
+        });
+    }
+    return {points, lineWidth, color};
+}
 
-        class Hexagon {
-            constructor(radius, gapAngle) {
-                this.radius = radius;
-                this.gapAngle = gapAngle;
-                this.rotation = 0;
-                this.rotationSpeed = (Math.random() * 0.02 + 0.005) * (Math.random() > 0.5 ? 1 : -1);
-                this.points = [];
-                this.calculatePoints();
-            }
+function initHexagons() {
+    hexagons = [
+        createHexagon(30, 2, '#ff6b6b'),
+        createHexagon(60, 3, '#4ecdc4'),
+        createHexagon(90, 4, '#45b7d1')
+    ];
+}
 
-            calculatePoints() {
-                this.points = [];
-                for (let i = 0; i < 6; i++) {
-                    const angle = this.gapAngle + i * Math.PI / 3 + this.rotation;
-                    if (Math.abs(angle % (Math.PI * 2) - this.gapAngle) > 0.01) {
-                        this.points.push({
-                            x: centerX + this.radius * Math.cos(angle),
-                            y: centerY + this.radius * Math.sin(angle)
-                        });
-                    }
-                }
-            }
+function drawHexagon(hex, rotation) {
+    ctx.beginPath();
+    const sides = hex.points.length;
+    for (let i = 0; i < sides; i++) {
+        const p = hex.points[i];
+        const x = 125 + (p.x - 125) * Math.cos(rotation) - (p.y - 200) * Math.sin(rotation);
+        const y = 200 + (p.x - 125) * Math.sin(rotation) + (p.y - 200) * Math.cos(rotation);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.lineWidth = hex.lineWidth;
+    ctx.strokeStyle = hex.color;
+    ctx.stroke();
+}
 
-            update() {
-                this.rotation += this.rotationSpeed;
-                this.calculatePoints();
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.moveTo(this.points[0].x, this.points[0].y);
-                for (let i = 1; i < this.points.length; i++) {
-                    ctx.lineTo(this.points[i].x, this.points[i].y);
-                }
-                ctx.closePath();
-                ctx.strokeStyle = '#aaa';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-            }
+class Ball {
+    constructor() {
+        this.reset();
+        this.radius = 4;
+        this.color = `hsl(${Math.random() * 360}, 100%, 60%)`;
+    }
+    reset() {
+        this.x = 125;
+        this.y = 200;
+        this.vx = (Math.random() - 0.5) * 6;
+        this.vy = (Math.random() - 0.5) * 6;
+        this.active = true;
+    }
+    update() {
+        if (!this.active) return;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vy += 0.08;
+        this.vx *= 0.995;
+        this.vy *= 0.995;
+        const dist = Math.hypot(this.x - 125, this.y - 200);
+        if (dist > 120) {
+            this.active = false;
+            return;
         }
-
-        class Ball {
-            constructor(x, y) {
-                this.id = ++ballId;
-                this.x = x;
-                this.y = y;
-                this.vx = (Math.random() - 0.5) * 4;
-                this.vy = (Math.random() - 0.5) * 4;
-                this.radius = 3;
-                this.color = colors[Math.floor(Math.random() * colors.length)];
-                this.friction = 0.99;
-                this.active = true;
-            }
-
-            update() {
-                if (!this.active) return;
-
-                this.vx *= this.friction;
-                this.vy *= this.friction;
-                this.x += this.vx;
-                this.y += this.vy;
-
-                let collided = false;
-                for (const hex of hexagons) {
-                    for (let i = 0; i < hex.points.length; i++) {
-                        const p1 = hex.points[i];
-                        const p2 = hex.points[(i + 1) % hex.points.length];
-                        if (this.lineCollision(p1.x, p1.y, p2.x, p2.y)) {
-                            collided = true;
-                            break;
+        hexagons.forEach(hex => {
+            const sides = hex.points.length;
+            for (let i = 0; i < sides; i++) {
+                const p1 = hex.points[i];
+                const p2 = hex.points[(i + 1) % sides];
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const length = Math.hypot(dx, dy);
+                const nx = -dy / length;
+                const ny = dx / length;
+                const relX = this.x - p1.x;
+                const relY = this.y - p1.y;
+                const dot = relX * nx + relY * ny;
+                if (Math.abs(dot) < this.radius + hex.lineWidth / 2) {
+                    const edgeDist = Math.abs((relX * dy - relY * dx) / length);
+                    if (edgeDist < length) {
+                        const proj = relX * dx / length + relY * dy / length;
+                        if (proj > 0 && proj < length) {
+                            this.x -= nx * (this.radius + hex.lineWidth / 2 - dot);
+                            this.y -= ny * (this.radius + hex.lineWidth / 2 - dot);
+                            const d = this.vx * nx + this.vy * ny;
+                            this.vx -= 2 * d * nx * 0.8;
+                            this.vy -= 2 * d * ny * 0.8;
                         }
                     }
-                    if (collided) break;
-                }
-
-                if (!collided) {
-                    const dist = Math.hypot(this.x - centerX, this.y - centerY);
-                    if (dist > hexagons[hexagons.length - 1].radius + 20) {
-                        this.active = false;
-                    }
-                }
-
-                if (Math.abs(this.vx) < 0.01 && Math.abs(this.vy) < 0.01) {
-                    this.active = false;
                 }
             }
+        });
+    }
+    draw() {
+        if (!this.active) return;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
+}
 
-            lineCollision(x1, y1, x2, y2) {
-                const length = Math.hypot(x2 - x1, y2 - y1);
-                const dot = ((this.x - x1) * (x2 - x1) + (this.y - y1) * (y2 - y1)) / (length * length);
-                const closestX = x1 + dot * (x2 - x1);
-                const closestY = y1 + dot * (y2 - y1);
-                const onSegment = (
-                    closestX >= Math.min(x1, x2) && closestX <= Math.max(x1, x2) &&
-                    closestY >= Math.min(y1, y2) && closestY <= Math.max(y1, y2)
-                );
-                if (!onSegment) return false;
+initHexagons();
+let rotation = 0;
+let lastTime = 0;
+let ballCounter = 0;
 
-                const dist = Math.hypot(this.x - closestX, this.y - closestY);
-                if (dist > this.radius) return false;
-
-                const lineAngle = Math.atan2(y2 - y1, x2 - x1);
-                const normalAngle = lineAngle + Math.PI / 2;
-                const speed = Math.hypot(this.vx, this.vy);
-                const angle = Math.atan2(this.vy, this.vx);
-                const reflection = 2 * normalAngle - angle;
-                this.vx = Math.cos(reflection) * speed * 0.8;
-                this.vy = Math.sin(reflection) * speed * 0.8;
-
-                const overlap = this.radius - dist;
-                this.x += Math.cos(normalAngle) * overlap;
-                this.y += Math.sin(normalAngle) * overlap;
-
-                return true;
-            }
-
-            draw() {
-                if (!this.active) return;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = this.color;
-                ctx.fill();
-            }
-        }
-
-        function init() {
-            hexagons.length = 0;
-            balls.length = 0;
-            const gapAngle = Math.PI / 2;
-            hexagons.push(new Hexagon(40, gapAngle));
-            hexagons.push(new Hexagon(80, gapAngle));
-            hexagons.push(new Hexagon(120, gapAngle));
-            for (let i = 0; i < 3; i++) {
-                balls.push(new Ball(centerX, centerY));
-            }
-        }
-
-        function animate(timestamp) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            hexagons.forEach(hex => {
-                hex.update();
-                hex.draw();
-            });
-
-            if (timestamp - lastBallTime > 800) {
-                balls.push(new Ball(centerX, centerY));
-                lastBallTime = timestamp;
-            }
-
-            for (let i = balls.length - 1; i >= 0; i--) {
-                balls[i].update();
-                balls[i].draw();
-                if (!balls[i].active) {
-                    balls.splice(i, 1);
-                }
-            }
-
-            requestAnimationFrame(animate);
-        }
-
-        init();
-        animate(0);
-    </script>
+function animate(timestamp) {
+    const delta = Math.min(timestamp - lastTime, 50) / 16;
+    lastTime = timestamp;
+    ctx.clearRect(0, 0, 250, 400);
+    rotation += 0.005 * delta;
+    hexagons.forEach((hex, i) => {
+        drawHexagon(hex, rotation * (i % 2 ? 1 : -1) * (i + 1));
+    });
+    ballCounter += delta;
+    if (ballCounter > 10 && balls.length < 25) {
+        balls.push(new Ball());
+        ballCounter = 0;
+    }
+    balls.forEach(ball => ball.update());
+    balls.forEach(ball => ball.draw());
+    for (let i = balls.length - 1; i >= 0; i--) {
+        if (!balls[i].active) balls.splice(i, 1);
+    }
+    requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+</script>
 </body>
 </html>

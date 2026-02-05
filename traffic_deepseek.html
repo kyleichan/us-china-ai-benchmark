@@ -1,309 +1,191 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Traffic Simulation</title>
+    <title>Urban Traffic Simulation</title>
     <style>
-        body { margin:0; padding:0; background:#111; }
-        canvas { display:block; }
+        body { margin: 0; padding: 0; background: #111; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        canvas { display: block; border: 1px solid #333; }
     </style>
 </head>
 <body>
-<canvas id="trafficCanvas"></canvas>
+<canvas id="trafficCanvas" width="250" height="400"></canvas>
 <script>
 const canvas = document.getElementById('trafficCanvas');
 const ctx = canvas.getContext('2d');
-canvas.width = 250;
-canvas.height = 400;
-
+const W = canvas.width, H = canvas.height;
 const GRID_SIZE = 10;
-const CELL_SIZE = Math.min(canvas.width, canvas.height) / (GRID_SIZE + 2);
-const ROAD_WIDTH = CELL_SIZE * 0.7;
-const LANE_OFFSET = ROAD_WIDTH / 4;
-
-const INTERSECTION_SIZE = CELL_SIZE;
-const VEHICLE_SIZE = CELL_SIZE * 0.3;
+const CELL_W = W / GRID_SIZE, CELL_H = H / GRID_SIZE;
 const MAX_VEHICLES = 40;
-const SPAWN_RATE = 0.02;
-const MAX_SPEED = 1.5;
-const FOLLOW_DISTANCE = VEHICLE_SIZE * 1.5;
-const BRAKE_FACTOR = 0.9;
-const ACCELERATION = 0.05;
+const MAX_SPEED = 1.2;
+const MIN_FOLLOW_DIST = 8;
+const LIGHT_CYCLE = 180;
+
+let vehicles = [];
+let lights = [];
+let frame = 0;
 
 class TrafficLight {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-        this.state = Math.random() > 0.5 ? 'green' : 'red';
-        this.timer = 0;
-        this.cycleTime = 120 + Math.random() * 180;
+        this.horizontalGreen = Math.random() > 0.5;
+        this.timer = Math.floor(Math.random() * LIGHT_CYCLE);
     }
     update() {
-        this.timer++;
-        if (this.timer > this.cycleTime) {
-            this.state = this.state === 'green' ? 'red' : 'green';
-            this.timer = 0;
-        }
+        this.timer = (this.timer + 1) % LIGHT_CYCLE;
+        if (this.timer === 0) this.horizontalGreen = !this.horizontalGreen;
     }
     draw() {
         ctx.save();
-        ctx.translate(this.x * CELL_SIZE + CELL_SIZE/2, this.y * CELL_SIZE + CELL_SIZE/2);
-        ctx.fillStyle = this.state === 'green' ? '#0f0' : '#f00';
+        ctx.translate(this.x * CELL_W, this.y * CELL_H);
+        ctx.fillStyle = this.horizontalGreen ? '#0f0' : '#f00';
         ctx.beginPath();
-        ctx.arc(0, 0, CELL_SIZE/8, 0, Math.PI * 2);
+        ctx.arc(CELL_W/2, CELL_H/2, 4, 0, Math.PI*2);
         ctx.fill();
         ctx.restore();
+    }
+    isRed(dir) {
+        return (dir === 'h' && !this.horizontalGreen) || (dir === 'v' && this.horizontalGreen);
     }
 }
 
 class Vehicle {
     constructor() {
         this.reset();
-        this.color = `hsl(${Math.random()*60 + 200}, 80%, 60%)`;
-    }
-    reset() {
-        const edge = Math.floor(Math.random() * 4);
-        let startX, startY, destX, destY;
-        
-        switch(edge) {
-            case 0: 
-                startX = Math.floor(Math.random() * GRID_SIZE);
-                startY = 0;
-                destX = Math.floor(Math.random() * GRID_SIZE);
-                destY = GRID_SIZE - 1;
-                break;
-            case 1:
-                startX = GRID_SIZE - 1;
-                startY = Math.floor(Math.random() * GRID_SIZE);
-                destX = 0;
-                destY = Math.floor(Math.random() * GRID_SIZE);
-                break;
-            case 2:
-                startX = Math.floor(Math.random() * GRID_SIZE);
-                startY = GRID_SIZE - 1;
-                destX = Math.floor(Math.random() * GRID_SIZE);
-                destY = 0;
-                break;
-            case 3:
-                startX = 0;
-                startY = Math.floor(Math.random() * GRID_SIZE);
-                destX = GRID_SIZE - 1;
-                destY = Math.floor(Math.random() * GRID_SIZE);
-                break;
-        }
-        
-        this.x = startX * CELL_SIZE + CELL_SIZE/2;
-        this.y = startY * CELL_SIZE + CELL_SIZE/2;
-        this.destX = destX * CELL_SIZE + CELL_SIZE/2;
-        this.destY = destY * CELL_SIZE + CELL_SIZE/2;
+        this.x = this.sx * CELL_W + CELL_W/2;
+        this.y = this.sy * CELL_H + CELL_H/2;
         this.vx = 0;
         this.vy = 0;
-        this.speed = 0;
-        this.targetSpeed = MAX_SPEED;
-        this.path = this.calculatePath(startX, startY, destX, destY);
-        this.currentSegment = 0;
-        this.arrived = false;
+        this.speed = MAX_SPEED * (0.8 + Math.random()*0.4);
+        this.size = 4;
+        this.color = `hsl(${Math.random()*60 + 10}, 100%, 60%)`;
     }
-    
-    calculatePath(sx, sy, dx, dy) {
-        const path = [];
-        let cx = sx, cy = sy;
-        
-        while(cx !== dx || cy !== dy) {
-            if (cx < dx) {
-                path.push({x: cx + 1, y: cy, dir: 'right'});
-                cx++;
-            } else if (cx > dx) {
-                path.push({x: cx - 1, y: cy, dir: 'left'});
-                cx--;
-            } else if (cy < dy) {
-                path.push({x: cx, y: cy + 1, dir: 'down'});
-                cy++;
-            } else if (cy > dy) {
-                path.push({x: cx, y: cy - 1, dir: 'up'});
-                cy--;
+    reset() {
+        this.sx = Math.floor(Math.random() * GRID_SIZE);
+        this.sy = Math.floor(Math.random() * GRID_SIZE);
+        this.tx = Math.floor(Math.random() * GRID_SIZE);
+        this.ty = Math.floor(Math.random() * GRID_SIZE);
+        while (this.sx === this.tx && this.sy === this.ty) {
+            this.tx = Math.floor(Math.random() * GRID_SIZE);
+            this.ty = Math.floor(Math.random() * GRID_SIZE);
+        }
+        this.path = [];
+        this.calcPath();
+    }
+    calcPath() {
+        this.path = [];
+        let cx = this.sx, cy = this.sy;
+        while (cx !== this.tx || cy !== this.ty) {
+            if (Math.random() < 0.5 && cx !== this.tx) {
+                cx += cx < this.tx ? 1 : -1;
+                this.path.push({x: cx, y: cy, dir: 'h'});
+            } else if (cy !== this.ty) {
+                cy += cy < this.ty ? 1 : -1;
+                this.path.push({x: cx, y: cy, dir: 'v'});
             }
         }
-        return path;
     }
-    
-    update(vehicles, lights) {
-        if (this.arrived) return;
-        
-        const gridX = Math.floor(this.x / CELL_SIZE);
-        const gridY = Math.floor(this.y / CELL_SIZE);
-        
-        if (this.currentSegment < this.path.length) {
-            const target = this.path[this.currentSegment];
-            const targetX = target.x * CELL_SIZE + CELL_SIZE/2;
-            const targetY = target.y * CELL_SIZE + CELL_SIZE/2;
-            
-            let dx = targetX - this.x;
-            let dy = targetY - this.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            
-            if (dist < 2) {
-                this.currentSegment++;
-            } else {
-                dx /= dist;
-                dy /= dist;
-                
-                this.vx = dx * this.speed;
-                this.vy = dy * this.speed;
-            }
-        }
-        
-        if (Math.abs(this.x - this.destX) < 2 && Math.abs(this.y - this.destY) < 2) {
-            this.arrived = true;
+    getCurrentTarget() {
+        if (this.path.length === 0) return null;
+        const next = this.path[0];
+        return {
+            x: next.x * CELL_W + CELL_W/2,
+            y: next.y * CELL_H + CELL_H/2,
+            dir: next.dir,
+            ix: next.x,
+            iy: next.y
+        };
+    }
+    update() {
+        const target = this.getCurrentTarget();
+        if (!target) {
+            this.reset();
             return;
         }
-        
-        const light = lights.find(l => 
-            Math.floor(l.x) === gridX && Math.floor(l.y) === gridY
-        );
-        
-        if (light && light.state === 'red') {
-            const distToLight = Math.sqrt(
-                Math.pow(this.x - (gridX * CELL_SIZE + CELL_SIZE/2), 2) +
-                Math.pow(this.y - (gridY * CELL_SIZE + CELL_SIZE/2), 2)
-            );
-            if (distToLight < CELL_SIZE * 0.8) {
-                this.targetSpeed = 0;
+        let dx = target.x - this.x;
+        let dy = target.y - this.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 2) {
+            this.path.shift();
+            return;
+        }
+        dx /= dist;
+        dy /= dist;
+        const light = lights.find(l => l.x === target.ix && l.y === target.iy);
+        const lightDist = Math.abs(target.x - this.x) + Math.abs(target.y - this.y);
+        let stopForLight = light && light.isRed(target.dir) && lightDist < MIN_FOLLOW_DIST*2;
+        let desiredSpeed = this.speed;
+        vehicles.forEach(v => {
+            if (v === this) return;
+            const d = Math.hypot(v.x - this.x, v.y - this.y);
+            if (d < MIN_FOLLOW_DIST) {
+                const dot = (v.x - this.x)*dx + (v.y - this.y)*dy;
+                if (dot > 0) desiredSpeed = Math.min(desiredSpeed, d - 2);
             }
-        } else {
-            this.targetSpeed = MAX_SPEED;
-        }
-        
-        let closestDist = Infinity;
-        for (const v of vehicles) {
-            if (v === this || v.arrived) continue;
-            const dx = v.x - this.x;
-            const dy = v.y - this.y;
-            const dist = Math.sqrt(dx*dx + dy*dy);
-            if (dist < FOLLOW_DISTANCE * 2 && dist < closestDist) {
-                const dot = (dx * this.vx + dy * this.vy) / (dist * this.speed || 1);
-                if (dot > 0.7) {
-                    closestDist = dist;
-                    if (dist < FOLLOW_DISTANCE) {
-                        this.targetSpeed = Math.max(0, v.speed * 0.8);
-                    }
-                }
-            }
-        }
-        
-        if (this.speed < this.targetSpeed) {
-            this.speed += ACCELERATION;
-        } else if (this.speed > this.targetSpeed) {
-            this.speed *= BRAKE_FACTOR;
-        }
-        this.speed = Math.max(0, Math.min(MAX_SPEED, this.speed));
-        
+        });
+        if (stopForLight) desiredSpeed = 0;
+        const acc = 0.1;
+        this.vx += (dx * desiredSpeed - this.vx) * acc;
+        this.vy += (dy * desiredSpeed - this.vy) * acc;
         this.x += this.vx;
         this.y += this.vy;
+        if (this.x < 0) this.x = 0;
+        if (this.x > W) this.x = W;
+        if (this.y < 0) this.y = 0;
+        if (this.y > H) this.y = H;
     }
-    
     draw() {
         ctx.save();
         ctx.translate(this.x, this.y);
-        const angle = Math.atan2(this.vy, this.vx);
-        ctx.rotate(angle);
+        ctx.rotate(Math.atan2(this.vy, this.vx));
         ctx.fillStyle = this.color;
-        ctx.fillRect(-VEHICLE_SIZE/2, -VEHICLE_SIZE/4, VEHICLE_SIZE, VEHICLE_SIZE/2);
+        ctx.fillRect(-this.size, -this.size/2, this.size*2, this.size);
         ctx.fillStyle = '#fff';
-        ctx.fillRect(VEHICLE_SIZE/4, -VEHICLE_SIZE/6, VEHICLE_SIZE/4, VEHICLE_SIZE/3);
+        ctx.fillRect(this.size-2, -1, 2, 2);
         ctx.restore();
     }
 }
 
-const lights = [];
-for (let x = 0; x < GRID_SIZE; x++) {
-    for (let y = 0; y < GRID_SIZE; y++) {
-        lights.push(new TrafficLight(x, y));
-    }
-}
-
-const vehicles = [];
-for (let i = 0; i < 15; i++) {
-    vehicles.push(new Vehicle());
-}
-
-function drawRoads() {
-    ctx.strokeStyle = '#444';
-    ctx.lineWidth = ROAD_WIDTH;
-    ctx.lineCap = 'square';
-    
-    for (let i = 0; i <= GRID_SIZE; i++) {
-        ctx.beginPath();
-        ctx.moveTo(CELL_SIZE/2, i * CELL_SIZE + CELL_SIZE/2);
-        ctx.lineTo(GRID_SIZE * CELL_SIZE + CELL_SIZE/2, i * CELL_SIZE + CELL_SIZE/2);
-        ctx.stroke();
-        
-        ctx.beginPath();
-        ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2, CELL_SIZE/2);
-        ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2, GRID_SIZE * CELL_SIZE + CELL_SIZE/2);
-        ctx.stroke();
-    }
-    
-    ctx.strokeStyle = '#666';
-    ctx.lineWidth = 2;
-    for (let i = 0; i <= GRID_SIZE; i++) {
-        for (let j = 0; j <= GRID_SIZE; j++) {
-            ctx.beginPath();
-            ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2 - LANE_OFFSET, j * CELL_SIZE + CELL_SIZE/2);
-            ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2 + LANE_OFFSET, j * CELL_SIZE + CELL_SIZE/2);
-            ctx.stroke();
-            
-            ctx.beginPath();
-            ctx.moveTo(i * CELL_SIZE + CELL_SIZE/2, j * CELL_SIZE + CELL_SIZE/2 - LANE_OFFSET);
-            ctx.lineTo(i * CELL_SIZE + CELL_SIZE/2, j * CELL_SIZE + CELL_SIZE/2 + LANE_OFFSET);
-            ctx.stroke();
+function init() {
+    vehicles = [];
+    lights = [];
+    for (let i = 0; i < GRID_SIZE; i++) {
+        for (let j = 0; j < GRID_SIZE; j++) {
+            if (Math.random() < 0.3) lights.push(new TrafficLight(i, j));
         }
     }
-}
-
-function update() {
-    for (const light of lights) light.update();
-    
-    for (const vehicle of vehicles) {
-        vehicle.update(vehicles, lights);
-    }
-    
-    for (let i = vehicles.length - 1; i >= 0; i--) {
-        if (vehicles[i].arrived) {
-            if (Math.random() < 0.02) {
-                vehicles[i] = new Vehicle();
-            } else if (vehicles.length > 15) {
-                vehicles.splice(i, 1);
-            }
-        }
-    }
-    
-    if (vehicles.length < MAX_VEHICLES && Math.random() < SPAWN_RATE) {
+    for (let i = 0; i < MAX_VEHICLES; i++) {
         vehicles.push(new Vehicle());
     }
 }
 
-function draw() {
-    ctx.fillStyle = '#111';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    ctx.save();
-    const offsetX = (canvas.width - (GRID_SIZE * CELL_SIZE + CELL_SIZE)) / 2;
-    const offsetY = (canvas.height - (GRID_SIZE * CELL_SIZE + CELL_SIZE)) / 2;
-    ctx.translate(offsetX, offsetY);
-    
-    drawRoads();
-    for (const light of lights) light.draw();
-    for (const vehicle of vehicles) vehicle.draw();
-    
-    ctx.restore();
+function drawGrid() {
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= GRID_SIZE; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * CELL_W, 0);
+        ctx.lineTo(i * CELL_W, H);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, i * CELL_H);
+        ctx.lineTo(W, i * CELL_H);
+        ctx.stroke();
+    }
 }
 
 function animate() {
-    update();
-    draw();
+    frame++;
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, W, H);
+    drawGrid();
+    lights.forEach(l => { l.update(); l.draw(); });
+    vehicles.forEach(v => v.update());
+    vehicles.forEach(v => v.draw());
     requestAnimationFrame(animate);
 }
 
+init();
 animate();
 </script>
 </body>
